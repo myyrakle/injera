@@ -1,3 +1,7 @@
+use clap::Parser;
+use rust_template::cli::{Cli, run};
+
 fn main() {
-    println!("Hello, world!");
+    let cli = Cli::parse();
+    run(cli);
 }

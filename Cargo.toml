@@ -14,3 +14,4 @@ documentation = "https://github.com/myyrakle/rust_template/blob/master/README.md
 homepage = "https://github.com/myyrakle/rust_template/blob/master/README.md"
 
 [dependencies]
+clap = { version = "4.5.37", features = ["derive"] }
