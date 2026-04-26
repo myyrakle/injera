@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rust_template::renamer::{rename_by_regex, rename_by_sequence};
+use injera::renamer::{rename_by_regex, rename_by_sequence};
 
 #[test]
 fn sequence_renames_files_in_lexical_order_and_keeps_extensions() {

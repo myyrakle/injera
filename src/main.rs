@@ -1,5 +1,5 @@
 use clap::Parser;
-use rust_template::cli::{Cli, run};
+use injera::cli::{Cli, run};
 
 fn main() {
     let cli = Cli::parse();

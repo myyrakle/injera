@@ -1,15 +1,9 @@
-use rust_template::cli::{Cli, Command};
+use injera::cli::{Cli, Command};
 
 #[test]
 fn parses_verbose_config_and_run_command() {
-    let cli = Cli::parse_from_args([
-        "rust_template",
-        "--verbose",
-        "--config",
-        "config.toml",
-        "run",
-    ])
-    .expect("CLI args should parse");
+    let cli = Cli::parse_from_args(["injera", "--verbose", "--config", "config.toml", "run"])
+        .expect("CLI args should parse");
 
     assert!(cli.verbose);
     assert_eq!(
@@ -21,7 +15,7 @@ fn parses_verbose_config_and_run_command() {
 
 #[test]
 fn parses_init_command() {
-    let cli = Cli::parse_from_args(["rust_template", "init"]).expect("CLI args should parse");
+    let cli = Cli::parse_from_args(["injera", "init"]).expect("CLI args should parse");
 
     assert!(!cli.verbose);
     assert!(cli.config.is_none());
@@ -30,12 +24,12 @@ fn parses_init_command() {
 
 #[test]
 fn parses_sequence_rename_command() {
-    let cli = Cli::parse_from_args(["rust_template", "rename", "sequence", "fixtures"])
+    let cli = Cli::parse_from_args(["injera", "rename", "sequence", "fixtures"])
         .expect("CLI args should parse");
 
     assert!(matches!(
         cli.command,
-        Command::Rename(rust_template::cli::RenameCommand::Sequence { ref directory })
+        Command::Rename(injera::cli::RenameCommand::Sequence { ref directory })
             if directory == std::path::Path::new("fixtures")
     ));
 }
@@ -43,7 +37,7 @@ fn parses_sequence_rename_command() {
 #[test]
 fn parses_regex_rename_command() {
     let cli = Cli::parse_from_args([
-        "rust_template",
+        "injera",
         "rename",
         "regex",
         "fixtures",
@@ -54,7 +48,7 @@ fn parses_regex_rename_command() {
 
     assert!(matches!(
         cli.command,
-        Command::Rename(rust_template::cli::RenameCommand::Regex {
+        Command::Rename(injera::cli::RenameCommand::Regex {
             ref directory,
             ref pattern,
             ref replacement,
