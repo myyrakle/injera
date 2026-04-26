@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use injera::renamer::{rename_by_regex, rename_by_sequence};
+use injera::renamer::{rename_by_regex_with_writer, rename_by_sequence_with_writer};
 
 #[test]
 fn sequence_renames_files_in_lexical_order_and_keeps_extensions() {
@@ -11,10 +11,28 @@ fn sequence_renames_files_in_lexical_order_and_keeps_extensions() {
     create_file(&dir, "carrot");
     fs::create_dir(dir.join("nested")).expect("directory should be created");
 
-    rename_by_sequence(&dir).expect("sequence rename should succeed");
+    let mut output = std::io::sink();
+    rename_by_sequence_with_writer(&dir, &mut output).expect("sequence rename should succeed");
 
     assert_eq!(file_names(&dir), ["00001.jpg", "00002.txt", "00003"]);
     assert!(dir.join("nested").is_dir());
+}
+
+#[test]
+fn sequence_writes_progress_logs() {
+    let dir = test_dir("sequence_logs");
+    create_file(&dir, "banana.txt");
+    create_file(&dir, "apple.jpg");
+
+    let mut output = Vec::new();
+    rename_by_sequence_with_writer(&dir, &mut output).expect("sequence rename should succeed");
+
+    let output = String::from_utf8(output).expect("log output should be UTF-8");
+    assert!(output.contains("Scanning"));
+    assert!(output.contains("Found 2 files"));
+    assert!(output.contains("[1/2] apple.jpg -> 00001.jpg"));
+    assert!(output.contains("[2/2] banana.txt -> 00002.txt"));
+    assert!(output.contains("Done"));
 }
 
 #[test]
@@ -24,7 +42,8 @@ fn regex_renames_files_with_capture_replacements() {
     create_file(&dir, "img-002.png");
     create_file(&dir, "note.txt");
 
-    rename_by_regex(&dir, r"^img-(\d+)\.(.+)$", "photo-$1.$2")
+    let mut output = std::io::sink();
+    rename_by_regex_with_writer(&dir, r"^img-(\d+)\.(.+)$", "photo-$1.$2", &mut output)
         .expect("regex rename should succeed");
 
     assert_eq!(
@@ -34,11 +53,30 @@ fn regex_renames_files_with_capture_replacements() {
 }
 
 #[test]
+fn regex_writes_progress_logs() {
+    let dir = test_dir("regex_logs");
+    create_file(&dir, "img-001.jpg");
+    create_file(&dir, "note.txt");
+
+    let mut output = Vec::new();
+    rename_by_regex_with_writer(&dir, r"^img-(\d+)\.(.+)$", "photo-$1.$2", &mut output)
+        .expect("regex rename should succeed");
+
+    let output = String::from_utf8(output).expect("log output should be UTF-8");
+    assert!(output.contains("Scanning"));
+    assert!(output.contains("Found 2 files"));
+    assert!(output.contains("[1/2] img-001.jpg -> photo-001.jpg"));
+    assert!(output.contains("[2/2] note.txt -> note.txt"));
+    assert!(output.contains("Done"));
+}
+
+#[test]
 fn regex_replaces_all_matches_in_each_file_name() {
     let dir = test_dir("regex_global");
     create_file(&dir, "daily-report-draft.txt");
 
-    rename_by_regex(&dir, "-", "_").expect("regex rename should succeed");
+    let mut output = std::io::sink();
+    rename_by_regex_with_writer(&dir, "-", "_", &mut output).expect("regex rename should succeed");
 
     assert_eq!(file_names(&dir), ["daily_report_draft.txt"]);
 }
@@ -49,7 +87,8 @@ fn regex_returns_error_when_multiple_files_resolve_to_same_name() {
     create_file(&dir, "a.txt");
     create_file(&dir, "b.txt");
 
-    let error = rename_by_regex(&dir, r"^[ab]\.txt$", "same.txt")
+    let mut output = std::io::sink();
+    let error = rename_by_regex_with_writer(&dir, r"^[ab]\.txt$", "same.txt", &mut output)
         .expect_err("duplicate targets should fail");
 
     assert_eq!(error.to_string(), "multiple files resolve to same.txt");
@@ -62,7 +101,9 @@ fn sequence_returns_error_when_target_path_is_blocked() {
     create_file(&dir, "apple.txt");
     fs::create_dir(dir.join("00001.txt")).expect("blocking directory should be created");
 
-    let error = rename_by_sequence(&dir).expect_err("blocked target should fail");
+    let mut output = std::io::sink();
+    let error =
+        rename_by_sequence_with_writer(&dir, &mut output).expect_err("blocked target should fail");
 
     assert_eq!(error.to_string(), "target already exists: 00001.txt");
     assert_eq!(file_names(&dir), ["apple.txt"]);

@@ -81,6 +81,17 @@ carrot
 
 파일이 100000개라면 `000001`처럼 필요한 만큼 자릿수가 늘어납니다.
 
+실행 중에는 진행 로그가 출력됩니다.
+
+```text
+Scanning ./photos
+Found 3 files
+[1/3] apple.jpg -> 00001.jpg
+[2/3] banana.txt -> 00002.txt
+[3/3] carrot -> 00003
+Done
+```
+
 ## 정규식 기반 rename
 
 특정 디렉토리 안의 모든 일반 파일명을 정규식으로 치환합니다.
@@ -114,6 +125,16 @@ cargo run -- rename regex ./docs '-' '_'
 
 ```text
 daily-report-draft.txt -> daily_report_draft.txt
+```
+
+정규식 기반 rename도 같은 방식으로 진행 로그를 출력합니다.
+
+```text
+Scanning ./photos
+Found 2 files
+[1/2] IMG_001.jpg -> photo-001.jpg
+[2/2] IMG_002.png -> photo-002.png
+Done
 ```
 
 ## 충돌 처리

@@ -1,11 +1,20 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
 pub fn rename_by_sequence(directory: &Path) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    rename_by_sequence_with_writer(directory, &mut writer)
+}
+
+pub fn rename_by_sequence_with_writer(directory: &Path, writer: &mut impl Write) -> io::Result<()> {
+    writeln!(writer, "Scanning {}", directory.display())?;
     let files = sorted_files(directory)?;
+    writeln!(writer, "Found {} files", files.len())?;
+
     let width = files.len().to_string().len().max(5);
 
     let targets = files
@@ -25,7 +34,11 @@ pub fn rename_by_sequence(directory: &Path) -> io::Result<()> {
     validate_unique_targets(&targets).map_err(io::Error::other)?;
     validate_available_targets(&files, &targets)?;
 
-    rename_all(&files, &targets)
+    log_plan(writer, &files, &targets)?;
+    rename_all(&files, &targets)?;
+    writeln!(writer, "Done")?;
+
+    Ok(())
 }
 
 pub fn rename_by_regex(
@@ -33,8 +46,22 @@ pub fn rename_by_regex(
     pattern: &str,
     replacement: &str,
 ) -> Result<(), RenameError> {
+    let stdout = io::stdout();
+    let mut writer = stdout.lock();
+    rename_by_regex_with_writer(directory, pattern, replacement, &mut writer)
+}
+
+pub fn rename_by_regex_with_writer(
+    directory: &Path,
+    pattern: &str,
+    replacement: &str,
+    writer: &mut impl Write,
+) -> Result<(), RenameError> {
+    writeln!(writer, "Scanning {}", directory.display()).map_err(RenameError::Io)?;
     let regex = Regex::new(pattern).map_err(RenameError::InvalidRegex)?;
     let files = sorted_files(directory).map_err(RenameError::Io)?;
+    writeln!(writer, "Found {} files", files.len()).map_err(RenameError::Io)?;
+
     let targets = files
         .iter()
         .map(|path| {
@@ -49,7 +76,11 @@ pub fn rename_by_regex(
     validate_unique_targets(&targets).map_err(RenameError::DuplicateTarget)?;
     validate_available_targets(&files, &targets).map_err(RenameError::Io)?;
 
-    rename_all(&files, &targets).map_err(RenameError::Io)
+    log_plan(writer, &files, &targets).map_err(RenameError::Io)?;
+    rename_all(&files, &targets).map_err(RenameError::Io)?;
+    writeln!(writer, "Done").map_err(RenameError::Io)?;
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -157,6 +188,28 @@ fn validate_available_targets(sources: &[PathBuf], targets: &[PathBuf]) -> io::R
     }
 
     Ok(())
+}
+
+fn log_plan(writer: &mut impl Write, sources: &[PathBuf], targets: &[PathBuf]) -> io::Result<()> {
+    for (index, (source, target)) in sources.iter().zip(targets).enumerate() {
+        writeln!(
+            writer,
+            "[{}/{}] {} -> {}",
+            index + 1,
+            sources.len(),
+            display_file_name(source),
+            display_file_name(target),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn display_file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or_else(|| path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn rename_all(sources: &[PathBuf], targets: &[PathBuf]) -> io::Result<()> {
