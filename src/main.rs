@@ -3,5 +3,8 @@ use rust_template::cli::{Cli, run};
 
 fn main() {
     let cli = Cli::parse();
-    run(cli);
+    if let Err(error) = run(cli) {
+        eprintln!("error: {error}");
+        std::process::exit(1);
+    }
 }

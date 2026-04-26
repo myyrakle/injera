@@ -27,3 +27,39 @@ fn parses_init_command() {
     assert!(cli.config.is_none());
     assert!(matches!(cli.command, Command::Init));
 }
+
+#[test]
+fn parses_sequence_rename_command() {
+    let cli = Cli::parse_from_args(["rust_template", "rename", "sequence", "fixtures"])
+        .expect("CLI args should parse");
+
+    assert!(matches!(
+        cli.command,
+        Command::Rename(rust_template::cli::RenameCommand::Sequence { ref directory })
+            if directory == std::path::Path::new("fixtures")
+    ));
+}
+
+#[test]
+fn parses_regex_rename_command() {
+    let cli = Cli::parse_from_args([
+        "rust_template",
+        "rename",
+        "regex",
+        "fixtures",
+        r"^(.+)\.txt$",
+        "$1.md",
+    ])
+    .expect("CLI args should parse");
+
+    assert!(matches!(
+        cli.command,
+        Command::Rename(rust_template::cli::RenameCommand::Regex {
+            ref directory,
+            ref pattern,
+            ref replacement,
+        }) if directory == std::path::Path::new("fixtures")
+            && pattern == r"^(.+)\.txt$"
+            && replacement == "$1.md"
+    ));
+}

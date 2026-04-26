@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+use crate::renamer::{rename_by_regex, rename_by_sequence};
+
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 pub struct Cli {
@@ -19,6 +21,20 @@ pub struct Cli {
 pub enum Command {
     Init,
     Run,
+    #[command(subcommand)]
+    Rename(RenameCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RenameCommand {
+    Sequence {
+        directory: PathBuf,
+    },
+    Regex {
+        directory: PathBuf,
+        pattern: String,
+        replacement: String,
+    },
 }
 
 impl Cli {
@@ -31,7 +47,7 @@ impl Cli {
     }
 }
 
-pub fn run(cli: Cli) {
+pub fn run(cli: Cli) -> std::io::Result<()> {
     match cli.command {
         Command::Init => {
             println!("Initializing project");
@@ -39,5 +55,19 @@ pub fn run(cli: Cli) {
         Command::Run => {
             println!("Running project");
         }
+        Command::Rename(command) => match command {
+            RenameCommand::Sequence { directory } => {
+                rename_by_sequence(&directory)?;
+            }
+            RenameCommand::Regex {
+                directory,
+                pattern,
+                replacement,
+            } => {
+                rename_by_regex(&directory, &pattern, &replacement)?;
+            }
+        },
     }
+
+    Ok(())
 }
