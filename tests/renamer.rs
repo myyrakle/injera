@@ -19,6 +19,21 @@ fn sequence_renames_files_in_lexical_order_and_keeps_extensions() {
 }
 
 #[test]
+fn sequence_preserves_natural_file_name_order_when_numbering() {
+    let dir = test_dir("sequence_natural_order");
+    create_file_with_content(&dir, "file-10.txt", "ten");
+    create_file_with_content(&dir, "file-2.txt", "two");
+    create_file_with_content(&dir, "file-1.txt", "one");
+
+    let mut output = std::io::sink();
+    rename_by_sequence_with_writer(&dir, &mut output).expect("sequence rename should succeed");
+
+    assert_eq!(read_file(&dir, "00001.txt"), "one");
+    assert_eq!(read_file(&dir, "00002.txt"), "two");
+    assert_eq!(read_file(&dir, "00003.txt"), "ten");
+}
+
+#[test]
 fn sequence_writes_progress_logs() {
     let dir = test_dir("sequence_logs");
     create_file(&dir, "banana.txt");
@@ -127,6 +142,14 @@ fn test_dir(name: &str) -> PathBuf {
 
 fn create_file(dir: &Path, name: &str) {
     fs::write(dir.join(name), b"test").expect("test file should be created");
+}
+
+fn create_file_with_content(dir: &Path, name: &str, content: &str) {
+    fs::write(dir.join(name), content).expect("test file should be created");
+}
+
+fn read_file(dir: &Path, name: &str) -> String {
+    fs::read_to_string(dir.join(name)).expect("test file should be readable")
 }
 
 fn file_names(dir: &Path) -> Vec<String> {
