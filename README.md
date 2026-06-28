@@ -2,7 +2,7 @@
 
 [English](README.md) | [한국어](README.ko.md)
 
-`injera` is a convenience CLI tool for file management.
+`injera` is a convenience tool for file management. It can run as a CLI and as a Tauri v2 GUI app.
 
 Currently supported features:
 
@@ -173,4 +173,37 @@ Check formatting:
 
 ```bash
 cargo fmt --check
+```
+
+Run the desktop GUI in development mode:
+
+```bash
+npm install
+npm run tauri:dev
+```
+
+Build the desktop GUI package:
+
+```bash
+npm run tauri:build
+```
+
+On rolling Linux distributions where AppImage bundling fails while stripping newer ELF sections, use:
+
+```bash
+npm run tauri:build:linux
+```
+
+Prepare mobile projects with the Tauri v2 CLI:
+
+```bash
+npm run tauri:android:init
+npm run tauri:ios:init
+```
+
+Run on a mobile target after installing the required Android or iOS SDK tooling:
+
+```bash
+npm run tauri:android:dev
+npm run tauri:ios:dev
 ```
