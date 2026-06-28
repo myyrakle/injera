@@ -11,6 +11,7 @@
     "tauri:build": "tauri build",
     "tauri:build:linux": "NO_STRIP=1 tauri build",
     "tauri:android:init": "tauri android init",
+    "tauri:android:build": "tauri android build",
     "tauri:android:dev": "tauri android dev",
     "tauri:ios:init": "tauri ios init",
     "tauri:ios:dev": "tauri ios dev"
