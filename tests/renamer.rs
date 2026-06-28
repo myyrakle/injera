@@ -1,7 +1,59 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use injera::renamer::{rename_by_regex_with_writer, rename_by_sequence_with_writer};
+use injera::renamer::{
+    apply_rename_plan, plan_regex_rename, plan_sequence_rename, rename_by_regex_with_writer,
+    rename_by_sequence_with_writer,
+};
+
+#[test]
+fn plan_sequence_rename_lists_natural_order_targets() {
+    let dir = test_dir("plan_sequence");
+    create_file_with_content(&dir, "file-10.txt", "ten");
+    create_file_with_content(&dir, "file-2.txt", "two");
+    create_file_with_content(&dir, "file-1.txt", "one");
+
+    let plan = plan_sequence_rename(&dir).expect("sequence plan should succeed");
+
+    assert_eq!(plan.directory, dir);
+    assert_eq!(plan.entries.len(), 3);
+    assert_eq!(plan.entries[0].source_name, "file-1.txt");
+    assert_eq!(plan.entries[0].target_name, "00001.txt");
+    assert_eq!(plan.entries[1].source_name, "file-2.txt");
+    assert_eq!(plan.entries[1].target_name, "00002.txt");
+    assert_eq!(plan.entries[2].source_name, "file-10.txt");
+    assert_eq!(plan.entries[2].target_name, "00003.txt");
+}
+
+#[test]
+fn plan_regex_rename_lists_replacements() {
+    let dir = test_dir("plan_regex");
+    create_file(&dir, "img-001.jpg");
+    create_file(&dir, "note.txt");
+
+    let plan = plan_regex_rename(&dir, r"^img-(\d+)\.(.+)$", "photo-$1.$2")
+        .expect("regex plan should succeed");
+
+    assert_eq!(plan.entries.len(), 2);
+    assert_eq!(plan.entries[0].source_name, "img-001.jpg");
+    assert_eq!(plan.entries[0].target_name, "photo-001.jpg");
+    assert_eq!(plan.entries[1].source_name, "note.txt");
+    assert_eq!(plan.entries[1].target_name, "note.txt");
+}
+
+#[test]
+fn apply_rename_plan_changes_files() {
+    let dir = test_dir("apply_plan");
+    create_file_with_content(&dir, "file-2.txt", "two");
+    create_file_with_content(&dir, "file-1.txt", "one");
+    let plan = plan_sequence_rename(&dir).expect("sequence plan should succeed");
+
+    let report = apply_rename_plan(&plan).expect("apply should succeed");
+
+    assert_eq!(report.renamed_count, 2);
+    assert_eq!(read_file(&dir, "00001.txt"), "one");
+    assert_eq!(read_file(&dir, "00002.txt"), "two");
+}
 
 #[test]
 fn sequence_renames_files_in_lexical_order_and_keeps_extensions() {
