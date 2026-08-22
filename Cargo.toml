@@ -2,21 +2,42 @@
 name = "injera"
 version = "0.1.0"
 edition = "2024"
-license = "MIT" 
-authors = ["myyrakle <sssang97@naver.com>"] 
-description = "..." 
-keywords = ["1", "2", "3"] 
+license = "MIT"
+authors = ["myyrakle <sssang97@naver.com>"]
+description = "Batch file renaming core library for the injera app"
+keywords = ["rename", "batch", "files", "regex"]
 include = ["src/*", "Cargo.toml"]
 exclude = []
 readme = "README.md"
-repository = "https://github.com/myyrakle/rust_template"
-documentation = "https://github.com/myyrakle/rust_template/blob/master/README.md"
-homepage = "https://github.com/myyrakle/rust_template/blob/master/README.md"
+repository = "https://github.com/myyrakle/injera"
+documentation = "https://github.com/myyrakle/injera/blob/master/README.md"
+homepage = "https://github.com/myyrakle/injera/blob/master/README.md"
 
 [workspace]
 members = [".", "src-tauri"]
 resolver = "2"
 
 [dependencies]
+base64 = "0.23.1"
+# Pure-Rust codecs only, so mobile and CI builds need no C toolchain.
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "webp",
+] }
 regex = "1.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
+# Read-only archive support, restricted to the pure-Rust decoders.
+zip = { version = "8.6.0", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+    "deflate64",
+    "bzip2",
+    "lzma",
+] }
+
+[dev-dependencies]
+serde_json = "1.0.145"
+zip = { version = "8.6.0", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
