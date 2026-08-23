@@ -2,13 +2,46 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./styles.css";
 
-type Mode = "sequence" | "regex";
+type Mode = "sequence" | "regex" | "convert";
+
+type MessageKind = "idle" | "success" | "error";
+
+type SequenceOptions = {
+  prefix: string;
+  start: number;
+  padding: number | null;
+};
+
+type DirectoryEntry = {
+  path: string;
+  name: string;
+};
+
+type FileEntry = {
+  path: string;
+  name: string;
+  size: number;
+  is_archive: boolean;
+};
+
+type DirectoryListing = {
+  path: string;
+  parent: string | null;
+  directories: DirectoryEntry[];
+  files: FileEntry[];
+};
+
+type ArchivePreview = {
+  entry_name: string;
+  data_uri: string;
+};
 
 type RenameEntry = {
   source: string;
   target: string;
   source_name: string;
   target_name: string;
+  selected: boolean;
 };
 
 type RenamePlan = {
@@ -20,29 +53,93 @@ type RenameReport = {
   renamed_count: number;
 };
 
+type TargetFormat = "keep" | "jpeg" | "png" | "webp";
+
+type ConvertOptions = {
+  format: TargetFormat;
+  quality: number;
+  suffix: string;
+};
+
+type ConvertEntry = {
+  source: string;
+  source_name: string;
+  output: string;
+  output_name: string;
+  selected: boolean;
+};
+
+type ConvertPlan = {
+  entries: ConvertEntry[];
+};
+
+type ConvertReport = {
+  output: string;
+  output_name: string;
+  images_converted: number;
+  images_skipped: number;
+  entries_copied: number;
+  source_bytes: number;
+  output_bytes: number;
+};
+
+/// One row of the plan table, whichever mode produced it.
+type PlanRow = {
+  source: string;
+  source_name: string;
+  target: string;
+  target_name: string;
+  selected: boolean;
+};
+
 type State = {
   mode: Mode;
-  directory: string;
-  pattern: string;
-  replacement: string;
+  listing: DirectoryListing | null;
+  selected: Set<string>;
   plan: RenamePlan | null;
+  conversion: ConvertPlan | null;
   busy: boolean;
   applied: boolean;
   message: string;
-  messageKind: "idle" | "success" | "error";
+  messageKind: MessageKind;
 };
+
+const MAX_PADDING = 20;
+const LAST_DIRECTORY_KEY = "injera:last-directory";
+
+/// The folder to reopen on launch. Browser storage can be unavailable, and the
+/// stored folder can be gone, so every read is best-effort.
+function rememberedDirectory(): string | null {
+  try {
+    return localStorage.getItem(LAST_DIRECTORY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberDirectory(path: string) {
+  try {
+    localStorage.setItem(LAST_DIRECTORY_KEY, path);
+  } catch {
+    // A private window or blocked storage simply forgets the folder.
+  }
+}
 
 const state: State = {
   mode: "sequence",
-  directory: "",
-  pattern: "",
-  replacement: "",
+  listing: null,
+  selected: new Set(),
   plan: null,
+  conversion: null,
   busy: false,
   applied: false,
-  message: "Ready",
+  message: "Loading",
   messageKind: "idle",
 };
+
+/** Archive path to its preview data URI, or `null` when it has none. */
+const thumbnails = new Map<string, string | null>();
+let thumbnailObserver: IntersectionObserver | null = null;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -50,46 +147,614 @@ if (!app) {
   throw new Error("app root is missing");
 }
 
-const root = app;
+app.innerHTML = `
+  <main class="shell">
+    <section class="toolbar" aria-label="Rename controls">
+      <div class="brand">
+        <span class="mark">
+          <svg viewBox="0 0 48 48" role="img" aria-label="injera">
+            <defs>
+              <radialGradient id="crumb-mark" cx="42%" cy="38%" r="72%">
+                <stop offset="0%" stop-color="#EFE6D0" />
+                <stop offset="62%" stop-color="#DFD0AE" />
+                <stop offset="100%" stop-color="#C9B48A" />
+              </radialGradient>
+            </defs>
+            <circle cx="24" cy="24" r="22.56" fill="url(#crumb-mark)" stroke="#A98F63" stroke-width="1.4" />
+            <g fill="#B99F73" fill-opacity="0.75">
+              <ellipse cx="7.7" cy="17.6" rx="2.7" ry="2.4" />
+              <ellipse cx="32.1" cy="29.4" rx="3.3" ry="2.9" />
+              <ellipse cx="29.7" cy="9.4" rx="2.1" ry="1.9" />
+              <ellipse cx="42.5" cy="21.9" rx="2.1" ry="1.8" />
+              <ellipse cx="19.4" cy="23.2" rx="2.0" ry="1.8" />
+              <ellipse cx="8.4" cy="30.1" rx="2.7" ry="2.4" />
+              <ellipse cx="14.8" cy="40.1" rx="2.1" ry="1.9" />
+              <ellipse cx="18.7" cy="7.4" rx="2.0" ry="1.8" />
+              <ellipse cx="27.0" cy="40.0" rx="2.4" ry="2.1" />
+            </g>
+          </svg>
+        </span>
+        <div>
+          <h1>injera</h1>
+          <p>Batch rename</p>
+        </div>
+      </div>
+
+      <div class="status" id="status" role="status">Loading</div>
+    </section>
+
+    <div class="workspace">
+      <section class="panel browser" aria-label="File browser">
+        <div class="panel-head">
+          <h2>Files</h2>
+          <span id="selection-count">0 selected</span>
+        </div>
+
+        <div class="path-row">
+          <button class="button ghost" id="up" type="button" title="Parent folder">Up</button>
+          <button class="button ghost" id="home" type="button" title="Home folder">Home</button>
+          <input id="path" readonly aria-label="Current folder" />
+          <button class="button secondary" id="choose-directory" type="button">Choose</button>
+        </div>
+
+        <div class="path-row secondary-row">
+          <button class="button ghost" id="select-all-files" type="button">Select all</button>
+          <button class="button ghost" id="clear-selection" type="button">Clear</button>
+          <span class="hint" id="folder-summary"></span>
+        </div>
+
+        <div class="browser-body" id="browser-body">
+          <ul class="folder-list" id="folders"></ul>
+          <table class="file-table">
+            <tbody id="files"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Rename settings">
+        <div class="panel-head">
+          <h2 id="panel-title">Rename</h2>
+          <span id="preview-count">No preview</span>
+        </div>
+
+        <div class="panel-body">
+          <div class="mode-row" role="group" aria-label="Rename mode">
+            <button class="segment" id="mode-sequence" type="button">Sequence</button>
+            <button class="segment" id="mode-regex" type="button">Regex</button>
+            <button class="segment" id="mode-convert" type="button">Convert</button>
+          </div>
+
+          <div class="fields sequence-controls" id="sequence-controls">
+            <label class="field">
+              <span>Prefix</span>
+              <input id="prefix" placeholder="none" />
+            </label>
+            <label class="field">
+              <span>Start number</span>
+              <input id="start" inputmode="numeric" placeholder="1" />
+            </label>
+            <label class="field">
+              <span>Padding</span>
+              <input id="padding" inputmode="numeric" placeholder="auto" />
+            </label>
+          </div>
+
+          <div class="fields regex-controls" id="regex-controls">
+            <label class="field">
+              <span>Pattern</span>
+              <input id="pattern" placeholder="^IMG_(\\d+)\\.(jpg|png)$" />
+            </label>
+            <label class="field">
+              <span>Replacement</span>
+              <input id="replacement" placeholder="photo-$1.$2" />
+            </label>
+          </div>
+
+          <div class="fields convert-controls" id="convert-controls">
+            <label class="field">
+              <span>Image format</span>
+              <select id="format">
+                <option value="keep">Keep original</option>
+                <option value="jpeg">JPEG</option>
+                <option value="png">PNG</option>
+                <option value="webp">WebP (lossless)</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Quality</span>
+              <input id="quality" inputmode="numeric" value="80" />
+            </label>
+            <label class="field">
+              <span>Suffix</span>
+              <input id="suffix" value="-compressed" />
+            </label>
+          </div>
+
+          <div class="actions">
+            <button class="button primary" id="preview" type="button">Preview</button>
+            <button class="button danger" id="apply" type="button">Apply</button>
+          </div>
+
+          <div class="table-wrap plan-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th class="select-cell">
+                    <input type="checkbox" id="select-all" aria-label="Rename every previewed file" />
+                  </th>
+                  <th>Current</th>
+                  <th>New</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+`;
+
+function required<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector);
+
+  if (!element) {
+    throw new Error(`${selector} is missing`);
+  }
+
+  return element;
+}
+
+const el = {
+  status: required<HTMLDivElement>("#status"),
+  path: required<HTMLInputElement>("#path"),
+  up: required<HTMLButtonElement>("#up"),
+  home: required<HTMLButtonElement>("#home"),
+  chooseDirectory: required<HTMLButtonElement>("#choose-directory"),
+  selectAllFiles: required<HTMLButtonElement>("#select-all-files"),
+  clearSelection: required<HTMLButtonElement>("#clear-selection"),
+  folderSummary: required<HTMLSpanElement>("#folder-summary"),
+  selectionCount: required<HTMLSpanElement>("#selection-count"),
+  browserBody: required<HTMLDivElement>("#browser-body"),
+  folders: required<HTMLUListElement>("#folders"),
+  files: required<HTMLTableSectionElement>("#files"),
+  modeSequence: required<HTMLButtonElement>("#mode-sequence"),
+  modeRegex: required<HTMLButtonElement>("#mode-regex"),
+  modeConvert: required<HTMLButtonElement>("#mode-convert"),
+  sequenceControls: required<HTMLElement>("#sequence-controls"),
+  regexControls: required<HTMLElement>("#regex-controls"),
+  convertControls: required<HTMLElement>("#convert-controls"),
+  format: required<HTMLSelectElement>("#format"),
+  quality: required<HTMLInputElement>("#quality"),
+  suffix: required<HTMLInputElement>("#suffix"),
+  prefix: required<HTMLInputElement>("#prefix"),
+  start: required<HTMLInputElement>("#start"),
+  padding: required<HTMLInputElement>("#padding"),
+  pattern: required<HTMLInputElement>("#pattern"),
+  replacement: required<HTMLInputElement>("#replacement"),
+  preview: required<HTMLButtonElement>("#preview"),
+  apply: required<HTMLButtonElement>("#apply"),
+  previewCount: required<HTMLSpanElement>("#preview-count"),
+  panelTitle: required<HTMLHeadingElement>("#panel-title"),
+  selectAll: required<HTMLInputElement>("#select-all"),
+  rows: required<HTMLTableSectionElement>("#rows"),
+};
 
 function setState(patch: Partial<State>) {
+  const planChanged =
+    ("plan" in patch && patch.plan !== state.plan) ||
+    ("conversion" in patch && patch.conversion !== state.conversion) ||
+    ("mode" in patch && patch.mode !== state.mode);
   Object.assign(state, patch);
-  render();
+
+  if (planChanged) {
+    renderPlanRows();
+  }
+
+  update();
+}
+
+/// The plan table rows for the active mode.
+function planRows(): PlanRow[] {
+  if (state.mode === "convert") {
+    return (state.conversion?.entries ?? []).map((entry) => ({
+      source: entry.source,
+      source_name: entry.source_name,
+      target: entry.output,
+      target_name: entry.output_name,
+      selected: entry.selected,
+    }));
+  }
+
+  return state.plan?.entries ?? [];
+}
+
+/// The entries backing `planRows`, so a checkbox can write its selection back.
+function planTargets(): Array<{ selected: boolean }> {
+  return state.mode === "convert"
+    ? (state.conversion?.entries ?? [])
+    : (state.plan?.entries ?? []);
+}
+
+function hasPlan(): boolean {
+  return state.mode === "convert" ? state.conversion !== null : state.plan !== null;
+}
+
+/// Files eligible for the active mode: convert only handles archives.
+function eligibleFiles(): string[] {
+  return (state.listing?.files ?? [])
+    .filter((file) => state.selected.has(file.path))
+    .filter((file) => state.mode !== "convert" || file.is_archive)
+    .map((file) => file.path);
+}
+
+/** Drops a preview that no longer matches the current inputs. */
+function invalidatePlan() {
+  if (state.plan === null && state.conversion === null && !state.applied) {
+    update();
+    return;
+  }
+
+  setState({ plan: null, conversion: null, applied: false });
+}
+
+function parseCount(value: string): number | null {
+  const trimmed = value.trim();
+
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+/** Returns the sequence options, or `null` when an input is not usable yet. */
+function sequenceOptions(): SequenceOptions | null {
+  const prefix = el.prefix.value;
+
+  if (prefix.includes("/") || prefix.includes("\\")) {
+    return null;
+  }
+
+  const startRaw = el.start.value.trim();
+  const start = startRaw === "" ? 1 : parseCount(startRaw);
+
+  if (start === null) {
+    return null;
+  }
+
+  const paddingRaw = el.padding.value.trim();
+
+  if (paddingRaw === "") {
+    return { prefix, start, padding: null };
+  }
+
+  const padding = parseCount(paddingRaw);
+
+  if (padding === null || padding > MAX_PADDING) {
+    return null;
+  }
+
+  return { prefix, start, padding };
+}
+
+/// Returns the conversion options, or `null` when an input is not usable yet.
+function convertOptions(): ConvertOptions | null {
+  const quality = parseCount(el.quality.value);
+
+  if (quality === null || quality < 1 || quality > 100) {
+    return null;
+  }
+
+  const suffix = el.suffix.value;
+
+  if (suffix.length === 0 || suffix.includes("/") || suffix.includes("\\")) {
+    return null;
+  }
+
+  return { format: el.format.value as TargetFormat, quality, suffix };
+}
+
+function planSelectedCount(): number {
+  return planTargets().filter((entry) => entry.selected).length;
+}
+
+function update() {
+  const inputsReady =
+    state.mode === "sequence"
+      ? sequenceOptions() !== null
+      : state.mode === "regex"
+        ? el.pattern.value.length > 0
+        : convertOptions() !== null;
+  const files = state.listing?.files ?? [];
+  const eligible = eligibleFiles().length;
+
+  el.status.textContent = state.message;
+  el.status.className = `status status-${state.messageKind}`;
+  el.path.value = state.listing?.path ?? "";
+  el.path.title = state.listing?.path ?? "";
+  // Long paths matter at the tail, so keep the current folder in view.
+  el.path.scrollLeft = el.path.scrollWidth;
+
+  el.up.disabled = state.busy || !state.listing?.parent;
+  el.home.disabled = state.busy;
+  el.chooseDirectory.disabled = state.busy;
+  el.selectAllFiles.disabled = state.busy || files.length === 0;
+  el.clearSelection.disabled = state.busy || state.selected.size === 0;
+
+  el.modeSequence.classList.toggle("active", state.mode === "sequence");
+  el.modeRegex.classList.toggle("active", state.mode === "regex");
+  el.modeConvert.classList.toggle("active", state.mode === "convert");
+  el.sequenceControls.hidden = state.mode !== "sequence";
+  el.regexControls.hidden = state.mode !== "regex";
+  el.convertControls.hidden = state.mode !== "convert";
+  // Only JPEG output is lossy, so quality is inert for the other formats.
+  el.quality.disabled = el.format.value === "png" || el.format.value === "webp";
+  el.apply.textContent = state.mode === "convert" ? "Convert" : "Apply";
+  el.panelTitle.textContent = state.mode === "convert" ? "Convert" : "Rename";
+
+  el.selectionCount.textContent = `${state.selected.size} selected`;
+  el.folderSummary.textContent = state.listing
+    ? `${state.listing.directories.length} folders · ${files.length} files`
+    : "";
+
+  el.preview.disabled = state.busy || eligible === 0 || !inputsReady;
+
+  updatePlanUi();
+}
+
+function updatePlanUi() {
+  const entries = planTargets();
+  const selected = planSelectedCount();
+
+  el.previewCount.textContent = hasPlan()
+    ? `${selected} of ${entries.length} selected`
+    : "No preview";
+  el.selectAll.disabled = entries.length === 0 || state.busy;
+  el.selectAll.checked = entries.length > 0 && selected === entries.length;
+  el.selectAll.indeterminate = selected > 0 && selected < entries.length;
+  el.apply.disabled = !hasPlan() || state.busy || state.applied || selected === 0;
+}
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+function renderBrowser() {
+  const listing = state.listing;
+
+  el.folders.innerHTML = (listing?.directories ?? [])
+    .map(
+      (entry) => `
+        <li>
+          <button class="folder" type="button" data-folder="${escapeAttribute(entry.path)}">
+            <span class="folder-icon" aria-hidden="true"></span>
+            <span class="folder-name">${escapeHtml(entry.name)}</span>
+          </button>
+        </li>
+      `,
+    )
+    .join("");
+
+  const files = listing?.files ?? [];
+
+  if (files.length === 0) {
+    el.files.innerHTML = `<tr><td class="empty" colspan="3">${
+      listing ? "No files in this folder." : "Loading folder."
+    }</td></tr>`;
+  } else {
+    el.files.innerHTML = files
+      .map(
+        (file) => `
+          <tr data-file-row="${escapeAttribute(file.path)}">
+            <td class="select-cell">
+              <input
+                type="checkbox"
+                data-file="${escapeAttribute(file.path)}"
+                ${state.selected.has(file.path) ? "checked" : ""}
+                aria-label="Select ${escapeAttribute(file.name)}"
+              />
+            </td>
+            <td class="thumb-cell">${
+              file.is_archive
+                ? `<span class="thumb" data-archive="${escapeAttribute(file.path)}"></span>`
+                : `<span class="thumb thumb-plain" aria-hidden="true"></span>`
+            }</td>
+            <td class="file-cell">
+              <span class="file-name" title="${escapeAttribute(file.path)}">${escapeHtml(file.name)}</span>
+              <span class="file-meta">${formatSize(file.size)}${file.is_archive ? " · archive" : ""}</span>
+            </td>
+          </tr>
+        `,
+      )
+      .join("");
+  }
+
+  observeThumbnails();
+}
+
+function observeThumbnails() {
+  thumbnailObserver?.disconnect();
+  thumbnailObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) {
+          continue;
+        }
+
+        const cell = entry.target as HTMLElement;
+        thumbnailObserver?.unobserve(cell);
+        void loadThumbnail(cell);
+      }
+    },
+    { root: el.browserBody, rootMargin: "300px" },
+  );
+
+  for (const cell of el.files.querySelectorAll<HTMLElement>("[data-archive]")) {
+    thumbnailObserver.observe(cell);
+  }
+}
+
+async function loadThumbnail(cell: HTMLElement) {
+  const path = cell.dataset.archive;
+
+  if (!path) {
+    return;
+  }
+
+  if (thumbnails.has(path)) {
+    paintThumbnail(cell, thumbnails.get(path) ?? null);
+    return;
+  }
+
+  cell.classList.add("thumb-loading");
+
+  try {
+    const preview = await invoke<ArchivePreview | null>("archive_preview", { path });
+    thumbnails.set(path, preview?.data_uri ?? null);
+    paintThumbnail(cell, preview?.data_uri ?? null);
+  } catch {
+    // A damaged or unsupported archive simply has no preview.
+    thumbnails.set(path, null);
+    paintThumbnail(cell, null);
+  }
+}
+
+function paintThumbnail(cell: HTMLElement, dataUri: string | null) {
+  cell.classList.remove("thumb-loading");
+
+  if (dataUri) {
+    cell.innerHTML = `<img src="${dataUri}" alt="" />`;
+  } else {
+    cell.classList.add("thumb-plain");
+  }
+}
+
+function renderPlanRows() {
+  const entries = planRows();
+
+  if (entries.length === 0) {
+    el.rows.innerHTML = `<tr><td class="empty" colspan="3">${
+      state.mode === "convert"
+        ? "Select archives, then preview the clones."
+        : "Select files, then preview the rename."
+    }</td></tr>`;
+    return;
+  }
+
+  el.rows.innerHTML = entries
+    .map(
+      (entry, index) => `
+        <tr>
+          <td class="select-cell">
+            <input
+              type="checkbox"
+              data-index="${index}"
+              ${entry.selected ? "checked" : ""}
+              aria-label="Include ${escapeAttribute(entry.source_name)}"
+            />
+          </td>
+          <td title="${escapeAttribute(entry.source)}">${escapeHtml(entry.source_name)}</td>
+          <td title="${escapeAttribute(entry.target)}">${escapeHtml(entry.target_name)}</td>
+        </tr>
+      `,
+    )
+    .join("");
+}
+
+async function openDirectory(path: string | null, message = "Ready") {
+  setState({ busy: true, message: "Loading folder", messageKind: "idle" });
+
+  try {
+    const listing = await invoke<DirectoryListing>("list_directory", { path });
+    state.selected.clear();
+    rememberDirectory(listing.path);
+    setState({
+      listing,
+      plan: null,
+      conversion: null,
+      applied: false,
+      busy: false,
+      message,
+      messageKind: "idle",
+    });
+    renderBrowser();
+    el.browserBody.scrollTop = 0;
+  } catch (error) {
+    if (path !== null) {
+      // A remembered folder can be renamed or unplugged; fall back to home.
+      await openDirectory(null, message);
+      return;
+    }
+
+    setState({ busy: false, message: String(error), messageKind: "error" });
+  }
 }
 
 async function chooseDirectory() {
-  const selected = await open({
-    directory: true,
-    multiple: false,
-    title: "Choose folder",
-  });
+  try {
+    const selected = await open({ directory: true, multiple: false, title: "Choose folder" });
 
-  if (typeof selected === "string") {
-    setState({
-      directory: selected,
-      plan: null,
-      applied: false,
-      message: "Directory selected",
-      messageKind: "idle",
-    });
+    if (typeof selected === "string") {
+      await openDirectory(selected, "Folder opened");
+    }
+  } catch (error) {
+    setState({ message: String(error), messageKind: "error" });
   }
 }
 
 async function previewRename() {
-  if (!state.directory || state.busy) {
+  const files = eligibleFiles();
+
+  if (state.busy || files.length === 0) {
     return;
   }
 
-  setState({ busy: true, plan: null, applied: false, message: "Previewing", messageKind: "idle" });
+  setState({
+    busy: true,
+    plan: null,
+    conversion: null,
+    applied: false,
+    message: "Previewing",
+    messageKind: "idle",
+  });
 
   try {
+    if (state.mode === "convert") {
+      const conversion = await invoke<ConvertPlan>("preview_conversion", {
+        files,
+        options: convertOptions(),
+      });
+      setState({
+        conversion,
+        busy: false,
+        message: `${conversion.entries.length} archives ready`,
+        messageKind: "success",
+      });
+      return;
+    }
+
     const plan =
       state.mode === "sequence"
-        ? await invoke<RenamePlan>("preview_sequence", { directory: state.directory })
+        ? await invoke<RenamePlan>("preview_sequence", { files, options: sequenceOptions() })
         : await invoke<RenamePlan>("preview_regex", {
-            directory: state.directory,
-            pattern: state.pattern,
-            replacement: state.replacement,
+            files,
+            pattern: el.pattern.value,
+            replacement: el.replacement.value,
           });
 
     setState({
@@ -99,16 +764,58 @@ async function previewRename() {
       messageKind: "success",
     });
   } catch (error) {
+    setState({ busy: false, message: String(error), messageKind: "error" });
+  }
+}
+
+async function runConversion() {
+  const entries = (state.conversion?.entries ?? []).filter((entry) => entry.selected);
+  const options = convertOptions();
+
+  if (entries.length === 0 || !options) {
+    return;
+  }
+
+  setState({ busy: true, message: "Converting", messageKind: "idle" });
+
+  let done = 0;
+  let saved = 0;
+
+  try {
+    for (const entry of entries) {
+      setState({
+        message: `Converting ${entry.source_name} (${done + 1}/${entries.length})`,
+        messageKind: "idle",
+      });
+      const report = await invoke<ConvertReport>("convert_archive", { entry, options });
+      done += 1;
+      saved += report.source_bytes - report.output_bytes;
+    }
+
+    const change =
+      saved >= 0 ? `${formatSize(saved)} saved` : `${formatSize(-saved)} larger`;
+    setState({ busy: false, applied: true });
+    await openDirectory(state.listing?.path ?? null, "Ready");
+    setState({
+      message: `${done} archives cloned · ${change}`,
+      messageKind: "success",
+    });
+  } catch (error) {
     setState({
       busy: false,
-      message: String(error),
+      message: done > 0 ? `${done} cloned, then failed: ${error}` : String(error),
       messageKind: "error",
     });
   }
 }
 
 async function applyRename() {
-  if (!state.plan || state.busy || state.applied) {
+  if (state.mode === "convert") {
+    await runConversion();
+    return;
+  }
+
+  if (!state.plan || state.busy || state.applied || planSelectedCount() === 0) {
     return;
   }
 
@@ -116,18 +823,12 @@ async function applyRename() {
 
   try {
     const report = await invoke<RenameReport>("apply_rename", { plan: state.plan });
-    setState({
-      busy: false,
-      applied: true,
-      message: `${report.renamed_count} files renamed`,
-      messageKind: "success",
-    });
+    const directory = state.listing?.path ?? null;
+    setState({ busy: false, applied: true });
+    await openDirectory(directory, `${report.renamed_count} files renamed`);
+    setState({ message: `${report.renamed_count} files renamed`, messageKind: "success" });
   } catch (error) {
-    setState({
-      busy: false,
-      message: String(error),
-      messageKind: "error",
-    });
+    setState({ busy: false, message: String(error), messageKind: "error" });
   }
 }
 
@@ -135,126 +836,11 @@ function changeMode(mode: Mode) {
   setState({
     mode,
     plan: null,
+    conversion: null,
     applied: false,
     message: "Ready",
     messageKind: "idle",
   });
-}
-
-function render() {
-  const canPreview =
-    Boolean(state.directory) && !state.busy && (state.mode === "sequence" || state.pattern.length > 0);
-  const canApply = Boolean(state.plan) && !state.busy && !state.applied;
-
-  root.innerHTML = `
-    <main class="shell">
-      <section class="toolbar" aria-label="Rename controls">
-        <div class="brand">
-          <span class="mark">I</span>
-          <div>
-            <h1>injera</h1>
-            <p>Batch rename</p>
-          </div>
-        </div>
-
-        <div class="status status-${state.messageKind}" role="status">${escapeHtml(state.message)}</div>
-      </section>
-
-      <section class="controls">
-        <label class="field field-grow">
-          <span>Directory</span>
-          <input readonly value="${escapeAttribute(state.directory)}" placeholder="No folder selected" />
-        </label>
-        <button class="button secondary" id="choose-directory" type="button" ${state.busy ? "disabled" : ""}>
-          Choose
-        </button>
-      </section>
-
-      <section class="mode-row" aria-label="Rename mode">
-        <button class="segment ${state.mode === "sequence" ? "active" : ""}" id="mode-sequence" type="button">
-          Sequence
-        </button>
-        <button class="segment ${state.mode === "regex" ? "active" : ""}" id="mode-regex" type="button">
-          Regex
-        </button>
-      </section>
-
-      ${
-        state.mode === "regex"
-          ? `<section class="controls regex-controls">
-              <label class="field">
-                <span>Pattern</span>
-                <input id="pattern" value="${escapeAttribute(state.pattern)}" placeholder="^IMG_(\\d+)\\.(jpg|png)$" />
-              </label>
-              <label class="field">
-                <span>Replacement</span>
-                <input id="replacement" value="${escapeAttribute(state.replacement)}" placeholder="photo-$1.$2" />
-              </label>
-            </section>`
-          : ""
-      }
-
-      <section class="actions">
-        <button class="button primary" id="preview" type="button" ${canPreview ? "" : "disabled"}>
-          Preview
-        </button>
-        <button class="button danger" id="apply" type="button" ${canApply ? "" : "disabled"}>
-          Apply
-        </button>
-      </section>
-
-      <section class="preview" aria-label="Rename preview">
-        <div class="preview-head">
-          <h2>Preview</h2>
-          <span>${state.plan ? `${state.plan.entries.length} files` : "No preview"}</span>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Current</th>
-                <th>New</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${renderRows(state.plan)}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </main>
-  `;
-
-  document.querySelector("#choose-directory")?.addEventListener("click", chooseDirectory);
-  document.querySelector("#mode-sequence")?.addEventListener("click", () => changeMode("sequence"));
-  document.querySelector("#mode-regex")?.addEventListener("click", () => changeMode("regex"));
-  document.querySelector("#preview")?.addEventListener("click", previewRename);
-  document.querySelector("#apply")?.addEventListener("click", applyRename);
-  document.querySelector<HTMLInputElement>("#pattern")?.addEventListener("input", (event) => {
-    const input = event.currentTarget as HTMLInputElement;
-    setState({ pattern: input.value, plan: null, applied: false });
-  });
-  document.querySelector<HTMLInputElement>("#replacement")?.addEventListener("input", (event) => {
-    const input = event.currentTarget as HTMLInputElement;
-    setState({ replacement: input.value, plan: null, applied: false });
-  });
-}
-
-function renderRows(plan: RenamePlan | null) {
-  if (!plan || plan.entries.length === 0) {
-    return `<tr><td class="empty" colspan="2">Select a folder and preview changes.</td></tr>`;
-  }
-
-  return plan.entries
-    .map(
-      (entry) => `
-        <tr>
-          <td title="${escapeAttribute(entry.source)}">${escapeHtml(entry.source_name)}</td>
-          <td title="${escapeAttribute(entry.target)}">${escapeHtml(entry.target_name)}</td>
-        </tr>
-      `,
-    )
-    .join("");
 }
 
 function escapeHtml(value: string) {
@@ -270,4 +856,107 @@ function escapeAttribute(value: string) {
   return escapeHtml(value);
 }
 
-render();
+el.up.addEventListener("click", () => {
+  if (state.listing?.parent) {
+    void openDirectory(state.listing.parent);
+  }
+});
+el.home.addEventListener("click", () => void openDirectory(null));
+el.chooseDirectory.addEventListener("click", chooseDirectory);
+
+el.folders.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>("[data-folder]");
+
+  if (button?.dataset.folder && !state.busy) {
+    void openDirectory(button.dataset.folder);
+  }
+});
+
+el.files.addEventListener("change", (event) => {
+  const checkbox = event.target;
+
+  if (!(checkbox instanceof HTMLInputElement) || !checkbox.dataset.file) {
+    return;
+  }
+
+  if (checkbox.checked) {
+    state.selected.add(checkbox.dataset.file);
+  } else {
+    state.selected.delete(checkbox.dataset.file);
+  }
+
+  invalidatePlan();
+});
+
+el.selectAllFiles.addEventListener("click", () => {
+  for (const file of state.listing?.files ?? []) {
+    state.selected.add(file.path);
+  }
+
+  syncFileCheckboxes();
+  invalidatePlan();
+});
+
+el.clearSelection.addEventListener("click", () => {
+  state.selected.clear();
+  syncFileCheckboxes();
+  invalidatePlan();
+});
+
+function syncFileCheckboxes() {
+  for (const checkbox of el.files.querySelectorAll<HTMLInputElement>("input[data-file]")) {
+    checkbox.checked = state.selected.has(checkbox.dataset.file ?? "");
+  }
+}
+
+el.modeSequence.addEventListener("click", () => changeMode("sequence"));
+el.modeRegex.addEventListener("click", () => changeMode("regex"));
+el.modeConvert.addEventListener("click", () => changeMode("convert"));
+el.preview.addEventListener("click", previewRename);
+el.apply.addEventListener("click", applyRename);
+
+for (const input of [
+  el.prefix,
+  el.start,
+  el.padding,
+  el.pattern,
+  el.replacement,
+  el.quality,
+  el.suffix,
+]) {
+  input.addEventListener("input", invalidatePlan);
+}
+
+el.format.addEventListener("change", invalidatePlan);
+
+el.selectAll.addEventListener("change", () => {
+  for (const entry of planTargets()) {
+    entry.selected = el.selectAll.checked;
+  }
+
+  for (const checkbox of el.rows.querySelectorAll<HTMLInputElement>("input[data-index]")) {
+    checkbox.checked = el.selectAll.checked;
+  }
+
+  updatePlanUi();
+});
+
+el.rows.addEventListener("change", (event) => {
+  const checkbox = event.target;
+
+  if (!(checkbox instanceof HTMLInputElement) || checkbox.dataset.index === undefined) {
+    return;
+  }
+
+  const entry = planTargets()[Number(checkbox.dataset.index)];
+
+  if (entry) {
+    entry.selected = checkbox.checked;
+    updatePlanUi();
+  }
+});
+
+renderBrowser();
+renderPlanRows();
+update();
+void openDirectory(rememberedDirectory());
