@@ -5,8 +5,8 @@ use injera::browser::{
     list_directory as list_directory_entries,
 };
 use injera::converter::{
-    ConvertEntry, ConvertOptions, ConvertPlan, ConvertReport, convert_archive as clone_archive,
-    plan_archive_conversion,
+    ConvertEntry, ConvertOptions, ConvertPlan, ConvertReport, convert_entry as convert_one,
+    plan_conversion,
 };
 use injera::renamer::{
     RenamePlan, RenameReport, SequenceOptions, apply_rename_plan, plan_regex_rename_for_files,
@@ -49,7 +49,7 @@ async fn preview_regex(
     plan_regex_rename_for_files(&files, &pattern, &replacement).map_err(|error| error.to_string())
 }
 
-/// Plans the compressed clones for the selected archives.
+/// Plans the converted copies for the selected archives and images.
 #[tauri::command]
 async fn preview_conversion(
     files: Vec<String>,
@@ -57,18 +57,18 @@ async fn preview_conversion(
 ) -> Result<ConvertPlan, String> {
     let files = to_paths(files);
     let options = options.unwrap_or_default();
-    plan_archive_conversion(&files, &options).map_err(|error| error.to_string())
+    plan_conversion(&files, &options).map_err(|error| error.to_string())
 }
 
-/// Writes one compressed clone. The frontend calls this per entry so progress
+/// Writes one converted copy. The frontend calls this per entry so progress
 /// shows up while a long batch runs.
 #[tauri::command]
-async fn convert_archive(
+async fn convert_entry(
     entry: ConvertEntry,
     options: Option<ConvertOptions>,
 ) -> Result<ConvertReport, String> {
     let options = options.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || clone_archive(&entry, &options))
+    tauri::async_runtime::spawn_blocking(move || convert_one(&entry, &options))
         .await
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())
@@ -94,7 +94,7 @@ pub fn run() {
             preview_regex,
             apply_rename,
             preview_conversion,
-            convert_archive
+            convert_entry
         ])
         .run(tauri::generate_context!())
         .expect("error while running injera tauri application");

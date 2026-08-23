@@ -30,6 +30,8 @@ pub struct FileEntry {
     pub size: u64,
     /// Whether the file can be opened for an archive preview.
     pub is_archive: bool,
+    /// Whether the file is an image the converter can re-encode.
+    pub is_image: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,6 +93,7 @@ pub fn list_directory(directory: &Path) -> io::Result<DirectoryListing> {
             let size = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
             files.push(FileEntry {
                 is_archive: is_archive(&entry_path),
+                is_image: is_image_file(&entry_path),
                 path: entry_path,
                 name,
                 size,
@@ -170,6 +173,11 @@ impl std::error::Error for ArchiveError {}
 /// Whether a path names an archive this app can open.
 pub fn is_archive(path: &Path) -> bool {
     has_extension(path, &ARCHIVE_EXTENSIONS)
+}
+
+/// Whether a path names an image the converter can re-encode.
+pub fn is_image_file(path: &Path) -> bool {
+    has_extension(path, &IMAGE_EXTENSIONS)
 }
 
 /// Whether an archive entry is real content rather than a directory marker or

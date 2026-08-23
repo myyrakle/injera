@@ -22,6 +22,7 @@ type FileEntry = {
   name: string;
   size: number;
   is_archive: boolean;
+  is_image: boolean;
 };
 
 type DirectoryListing = {
@@ -61,7 +62,10 @@ type ConvertOptions = {
   suffix: string;
 };
 
+type ConvertKind = "archive" | "image";
+
 type ConvertEntry = {
+  kind: ConvertKind;
   source: string;
   source_name: string;
   output: string;
@@ -380,11 +384,12 @@ function hasPlan(): boolean {
   return state.mode === "convert" ? state.conversion !== null : state.plan !== null;
 }
 
-/// Files eligible for the active mode: convert only handles archives.
+/// Files eligible for the active mode. Convert handles archives and images;
+/// renaming handles anything.
 function eligibleFiles(): string[] {
   return (state.listing?.files ?? [])
     .filter((file) => state.selected.has(file.path))
-    .filter((file) => state.mode !== "convert" || file.is_archive)
+    .filter((file) => state.mode !== "convert" || file.is_archive || file.is_image)
     .map((file) => file.path);
 }
 
@@ -576,7 +581,9 @@ function renderBrowser() {
             }</td>
             <td class="file-cell">
               <span class="file-name" title="${escapeAttribute(file.path)}">${escapeHtml(file.name)}</span>
-              <span class="file-meta">${formatSize(file.size)}${file.is_archive ? " · archive" : ""}</span>
+              <span class="file-meta">${formatSize(file.size)}${
+                file.is_archive ? " · archive" : file.is_image ? " · image" : ""
+              }</span>
             </td>
           </tr>
         `,
@@ -650,7 +657,7 @@ function renderPlanRows() {
   if (entries.length === 0) {
     el.rows.innerHTML = `<tr><td class="empty" colspan="3">${
       state.mode === "convert"
-        ? "Select archives, then preview the clones."
+        ? "Select archives or images, then preview the copies."
         : "Select files, then preview the rename."
     }</td></tr>`;
     return;
@@ -742,7 +749,7 @@ async function previewRename() {
       setState({
         conversion,
         busy: false,
-        message: `${conversion.entries.length} archives ready`,
+        message: `${conversion.entries.length} files ready`,
         messageKind: "success",
       });
       return;
@@ -787,17 +794,18 @@ async function runConversion() {
         message: `Converting ${entry.source_name} (${done + 1}/${entries.length})`,
         messageKind: "idle",
       });
-      const report = await invoke<ConvertReport>("convert_archive", { entry, options });
+      const report = await invoke<ConvertReport>("convert_entry", { entry, options });
       done += 1;
       saved += report.source_bytes - report.output_bytes;
     }
 
     const change =
       saved >= 0 ? `${formatSize(saved)} saved` : `${formatSize(-saved)} larger`;
+    const noun = done === 1 ? "file" : "files";
     setState({ busy: false, applied: true });
     await openDirectory(state.listing?.path ?? null, "Ready");
     setState({
-      message: `${done} archives cloned · ${change}`,
+      message: `${done} ${noun} converted · ${change}`,
       messageKind: "success",
     });
   } catch (error) {

@@ -2,7 +2,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use injera::converter::{ConvertOptions, TargetFormat, convert_archive, plan_archive_conversion};
+use injera::converter::{
+    ConvertKind, ConvertOptions, TargetFormat, convert_entry, plan_conversion,
+};
 
 #[test]
 fn plan_names_the_clone_from_the_suffix() {
@@ -10,26 +12,27 @@ fn plan_names_the_clone_from_the_suffix() {
     let archive = dir.join("volume-1.cbz");
     write_archive(&archive, &[("page-1.png", png(8, 8))]);
 
-    let plan = plan_archive_conversion(std::slice::from_ref(&archive), &ConvertOptions::default())
+    let plan = plan_conversion(std::slice::from_ref(&archive), &ConvertOptions::default())
         .expect("plan should succeed");
 
     assert_eq!(plan.entries.len(), 1);
     assert_eq!(plan.entries[0].source_name, "volume-1.cbz");
     assert_eq!(plan.entries[0].output_name, "volume-1-compressed.cbz");
     assert_eq!(plan.entries[0].output, dir.join("volume-1-compressed.cbz"));
+    assert_eq!(plan.entries[0].kind, ConvertKind::Archive);
     assert!(plan.entries[0].selected);
 }
 
 #[test]
-fn plan_rejects_a_file_that_is_not_an_archive() {
+fn plan_rejects_a_file_that_is_neither_an_archive_nor_an_image() {
     let dir = test_dir("plan_not_archive");
     let file = dir.join("notes.txt");
     fs::write(&file, b"text").expect("file should be created");
 
-    let error = plan_archive_conversion(&[file], &ConvertOptions::default())
+    let error = plan_conversion(&[file], &ConvertOptions::default())
         .expect_err("a plain file should be rejected");
 
-    assert_eq!(error.to_string(), "notes.txt is not a zip archive");
+    assert_eq!(error.to_string(), "notes.txt is not an archive or an image");
 }
 
 #[test]
@@ -39,7 +42,7 @@ fn plan_rejects_an_existing_output() {
     write_archive(&archive, &[("page-1.png", png(8, 8))]);
     fs::write(dir.join("volume-1-compressed.zip"), b"taken").expect("file should be created");
 
-    let error = plan_archive_conversion(&[archive], &ConvertOptions::default())
+    let error = plan_conversion(&[archive], &ConvertOptions::default())
         .expect_err("an existing output should be rejected");
 
     assert_eq!(error.to_string(), "volume-1-compressed.zip already exists");
@@ -47,10 +50,10 @@ fn plan_rejects_an_existing_output() {
 
 #[test]
 fn plan_rejects_an_empty_selection() {
-    let error = plan_archive_conversion(&[], &ConvertOptions::default())
+    let error = plan_conversion(&[], &ConvertOptions::default())
         .expect_err("an empty selection should be rejected");
 
-    assert_eq!(error.to_string(), "no archives selected");
+    assert_eq!(error.to_string(), "nothing selected");
 }
 
 #[test]
@@ -63,8 +66,7 @@ fn plan_rejects_a_bad_quality() {
         quality: 0,
         ..ConvertOptions::default()
     };
-    let error =
-        plan_archive_conversion(&[archive], &options).expect_err("quality 0 should be rejected");
+    let error = plan_conversion(&[archive], &options).expect_err("quality 0 should be rejected");
 
     assert_eq!(error.to_string(), "quality must be between 1 and 100");
 }
@@ -79,8 +81,7 @@ fn plan_rejects_a_suffix_with_a_path_separator() {
         suffix: "../escaped".to_string(),
         ..ConvertOptions::default()
     };
-    let error =
-        plan_archive_conversion(&[archive], &options).expect_err("a separator should be rejected");
+    let error = plan_conversion(&[archive], &options).expect_err("a separator should be rejected");
 
     assert_eq!(error.to_string(), "suffix must not contain path separators");
 }
@@ -104,8 +105,8 @@ fn convert_rewrites_images_as_jpeg_and_copies_the_rest() {
         quality: 60,
         ..ConvertOptions::default()
     };
-    let plan = plan_archive_conversion(&[archive], &options).expect("plan should succeed");
-    let report = convert_archive(&plan.entries[0], &options).expect("conversion should succeed");
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
 
     assert_eq!(report.images_converted, 2);
     assert_eq!(report.images_skipped, 0);
@@ -128,8 +129,8 @@ fn convert_keeps_the_original_format_by_default() {
     write_archive(&archive, &[("page-1.png", png(32, 32))]);
 
     let options = ConvertOptions::default();
-    let plan = plan_archive_conversion(&[archive], &options).expect("plan should succeed");
-    let report = convert_archive(&plan.entries[0], &options).expect("conversion should succeed");
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
 
     assert_eq!(report.images_converted, 1);
     assert_eq!(archive_names(&report.output), ["page-1.png"]);
@@ -147,9 +148,9 @@ fn convert_leaves_the_source_untouched() {
     let before = fs::read(&archive).expect("source should be readable");
 
     let options = ConvertOptions::default();
-    let plan = plan_archive_conversion(std::slice::from_ref(&archive), &options)
-        .expect("plan should succeed");
-    convert_archive(&plan.entries[0], &options).expect("conversion should succeed");
+    let plan =
+        plan_conversion(std::slice::from_ref(&archive), &options).expect("plan should succeed");
+    convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
 
     assert_eq!(
         fs::read(&archive).expect("source should be readable"),
@@ -164,8 +165,8 @@ fn convert_copies_images_it_cannot_decode() {
     write_archive(&archive, &[("page-1.png", b"not really a png".to_vec())]);
 
     let options = ConvertOptions::default();
-    let plan = plan_archive_conversion(&[archive], &options).expect("plan should succeed");
-    let report = convert_archive(&plan.entries[0], &options).expect("conversion should succeed");
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
 
     assert_eq!(report.images_converted, 0);
     assert_eq!(report.images_skipped, 1);
@@ -186,14 +187,126 @@ fn convert_shrinks_a_photographic_page_at_low_quality() {
         quality: 30,
         ..ConvertOptions::default()
     };
-    let plan = plan_archive_conversion(&[archive], &options).expect("plan should succeed");
-    let report = convert_archive(&plan.entries[0], &options).expect("conversion should succeed");
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
 
     assert!(
         report.output_bytes < report.source_bytes,
         "expected the clone to shrink: {} -> {}",
         report.source_bytes,
         report.output_bytes
+    );
+}
+
+#[test]
+fn plan_names_a_converted_image_after_the_target_format() {
+    let dir = test_dir("plan_image_name");
+    let source = dir.join("cover.png");
+    fs::write(&source, png(16, 16)).expect("image should be created");
+
+    let options = ConvertOptions {
+        format: TargetFormat::Jpeg,
+        ..ConvertOptions::default()
+    };
+    let plan =
+        plan_conversion(std::slice::from_ref(&source), &options).expect("plan should succeed");
+
+    assert_eq!(plan.entries[0].kind, ConvertKind::Image);
+    assert_eq!(plan.entries[0].output_name, "cover-compressed.jpg");
+}
+
+#[test]
+fn plan_keeps_the_image_extension_when_the_format_is_kept() {
+    let dir = test_dir("plan_image_keep");
+    let source = dir.join("cover.png");
+    fs::write(&source, png(16, 16)).expect("image should be created");
+
+    let plan = plan_conversion(std::slice::from_ref(&source), &ConvertOptions::default())
+        .expect("plan should succeed");
+
+    assert_eq!(plan.entries[0].output_name, "cover-compressed.png");
+}
+
+#[test]
+fn convert_rewrites_a_single_image_and_keeps_the_source() {
+    let dir = test_dir("convert_image");
+    let source = dir.join("cover.png");
+    fs::write(&source, noisy_png(200, 200)).expect("image should be created");
+    let before = fs::read(&source).expect("source should be readable");
+
+    let options = ConvertOptions {
+        format: TargetFormat::Jpeg,
+        quality: 40,
+        ..ConvertOptions::default()
+    };
+    let plan =
+        plan_conversion(std::slice::from_ref(&source), &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
+
+    assert_eq!(report.images_converted, 1);
+    assert_eq!(report.entries_copied, 0);
+    assert_eq!(report.output_name, "cover-compressed.jpg");
+    assert_eq!(
+        image::guess_format(&fs::read(&report.output).expect("output should be readable"))
+            .expect("format"),
+        image::ImageFormat::Jpeg
+    );
+    assert!(report.output_bytes < report.source_bytes);
+    assert_eq!(
+        fs::read(&source).expect("source should be readable"),
+        before
+    );
+}
+
+#[test]
+fn convert_reports_an_image_it_cannot_decode() {
+    let dir = test_dir("convert_image_broken");
+    let source = dir.join("cover.png");
+    fs::write(&source, b"not really a png").expect("file should be created");
+
+    let options = ConvertOptions::default();
+    let plan =
+        plan_conversion(std::slice::from_ref(&source), &options).expect("plan should succeed");
+    let error =
+        convert_entry(&plan.entries[0], &options).expect_err("a broken image should be reported");
+
+    assert_eq!(error.to_string(), "cover.png could not be decoded");
+}
+
+#[test]
+fn plan_accepts_archives_and_images_together() {
+    let dir = test_dir("plan_mixed");
+    let archive = dir.join("volume-1.cbz");
+    write_archive(&archive, &[("page-1.png", png(8, 8))]);
+    let image = dir.join("cover.png");
+    fs::write(&image, png(16, 16)).expect("image should be created");
+
+    let plan = plan_conversion(&[archive, image], &ConvertOptions::default())
+        .expect("plan should succeed");
+
+    assert_eq!(plan.entries.len(), 2);
+    assert_eq!(plan.entries[0].kind, ConvertKind::Archive);
+    assert_eq!(plan.entries[1].kind, ConvertKind::Image);
+}
+
+#[test]
+fn plan_rejects_two_sources_that_resolve_to_one_output() {
+    let dir = test_dir("plan_collision");
+    let jpg = dir.join("cover.jpg");
+    let png_file = dir.join("cover.png");
+    fs::write(&jpg, png(8, 8)).expect("image should be created");
+    fs::write(&png_file, png(8, 8)).expect("image should be created");
+
+    let options = ConvertOptions {
+        format: TargetFormat::Png,
+        ..ConvertOptions::default()
+    };
+    let error =
+        plan_conversion(&[jpg, png_file], &options).expect_err("a collision should be rejected");
+
+    assert_eq!(
+        error.to_string(),
+        "multiple files resolve to cover-compressed.png"
     );
 }
 

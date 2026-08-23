@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use image::{DynamicImage, ImageEncoder, ImageFormat};
 use serde::{Deserialize, Serialize};
 
-use crate::browser::is_archive;
+use crate::browser::{is_archive, is_image_file};
 
 /// Entries larger than this are copied through untouched rather than decoded,
 /// so one absurd image cannot exhaust memory.
@@ -45,8 +45,18 @@ impl Default for ConvertOptions {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConvertKind {
+    /// A zip/cbz cloned with every image inside it re-encoded.
+    Archive,
+    /// A single image file re-encoded into a new file.
+    Image,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConvertEntry {
+    pub kind: ConvertKind,
     pub source: PathBuf,
     pub source_name: String,
     pub output: PathBuf,
@@ -78,8 +88,11 @@ pub struct ConvertReport {
     pub output_bytes: u64,
 }
 
-/// Plans the clones for a selection of archives without touching the disk.
-pub fn plan_archive_conversion(
+/// Plans the converted copies for a selection without touching the disk.
+///
+/// Archives are cloned with their images re-encoded; image files are
+/// re-encoded on their own.
+pub fn plan_conversion(
     files: &[PathBuf],
     options: &ConvertOptions,
 ) -> Result<ConvertPlan, ConvertError> {
@@ -87,20 +100,30 @@ pub fn plan_archive_conversion(
 
     if files.is_empty() {
         return Err(ConvertError::Rejected {
-            message: "no archives selected".to_string(),
+            message: "nothing selected".to_string(),
         });
     }
 
     let mut entries = Vec::with_capacity(files.len());
 
     for source in files {
-        if !is_archive(source) {
+        let kind = if is_archive(source) {
+            ConvertKind::Archive
+        } else if is_image_file(source) {
+            ConvertKind::Image
+        } else {
             return Err(ConvertError::Rejected {
-                message: format!("{} is not a zip archive", display_name(source)),
+                message: format!("{} is not an archive or an image", display_name(source)),
             });
-        }
+        };
 
-        let output = clone_path(source, &options.suffix);
+        // An archive keeps its own extension; a converted image takes the
+        // extension of the format it is written in.
+        let extension = match kind {
+            ConvertKind::Archive => None,
+            ConvertKind::Image => image_output_extension(source, options),
+        };
+        let output = clone_path(source, &options.suffix, extension);
 
         if output.exists() {
             return Err(ConvertError::Rejected {
@@ -109,6 +132,7 @@ pub fn plan_archive_conversion(
         }
 
         entries.push(ConvertEntry {
+            kind,
             source_name: display_name(source),
             output_name: display_name(&output),
             source: source.clone(),
@@ -125,7 +149,7 @@ pub fn plan_archive_conversion(
     for (index, output) in outputs.iter().enumerate() {
         if outputs[index + 1..].iter().any(|other| other == output) {
             return Err(ConvertError::Rejected {
-                message: format!("multiple archives resolve to {}", display_name(output)),
+                message: format!("multiple files resolve to {}", display_name(output)),
             });
         }
     }
@@ -133,16 +157,60 @@ pub fn plan_archive_conversion(
     Ok(ConvertPlan { entries })
 }
 
-/// Writes `entry.output`: a copy of the archive whose images are re-encoded.
-///
-/// Entries that cannot be decoded are copied through unchanged so a single bad
-/// image never costs the rest of the archive.
-pub fn convert_archive(
+/// Writes `entry.output`, leaving `entry.source` untouched.
+pub fn convert_entry(
     entry: &ConvertEntry,
     options: &ConvertOptions,
 ) -> Result<ConvertReport, ConvertError> {
     validate_options(options)?;
 
+    if entry.output.exists() {
+        return Err(ConvertError::Rejected {
+            message: format!("{} already exists", display_name(&entry.output)),
+        });
+    }
+
+    match entry.kind {
+        ConvertKind::Archive => convert_archive(entry, options),
+        ConvertKind::Image => convert_image_file(entry, options),
+    }
+}
+
+/// Re-encodes one image file into `entry.output`.
+fn convert_image_file(
+    entry: &ConvertEntry,
+    options: &ConvertOptions,
+) -> Result<ConvertReport, ConvertError> {
+    let bytes = fs::read(&entry.source).map_err(ConvertError::Io)?;
+    let source_bytes = bytes.len() as u64;
+
+    let Some((data, _)) = convert_image(&bytes, options) else {
+        return Err(ConvertError::Rejected {
+            message: format!("{} could not be decoded", entry.source_name),
+        });
+    };
+
+    fs::write(&entry.output, &data).map_err(ConvertError::Io)?;
+
+    Ok(ConvertReport {
+        output: entry.output.clone(),
+        output_name: entry.output_name.clone(),
+        images_converted: 1,
+        images_skipped: 0,
+        entries_copied: 0,
+        source_bytes,
+        output_bytes: data.len() as u64,
+    })
+}
+
+/// Clones the archive with every image inside it re-encoded.
+///
+/// Entries that cannot be decoded are copied through unchanged so a single bad
+/// image never costs the rest of the archive.
+fn convert_archive(
+    entry: &ConvertEntry,
+    options: &ConvertOptions,
+) -> Result<ConvertReport, ConvertError> {
     if entry.output.exists() {
         return Err(ConvertError::Rejected {
             message: format!("{} already exists", display_name(&entry.output)),
@@ -268,17 +336,33 @@ fn validate_options(options: &ConvertOptions) -> Result<(), ConvertError> {
 }
 
 /// `volume-1.cbz` with suffix `-compressed` becomes `volume-1-compressed.cbz`.
-fn clone_path(source: &Path, suffix: &str) -> PathBuf {
+/// `extension` overrides the source extension when the format changes.
+fn clone_path(source: &Path, suffix: &str, extension: Option<&str>) -> PathBuf {
     let stem = source
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let name = match source.extension().and_then(|extension| extension.to_str()) {
+    let extension = extension.or_else(|| source.extension().and_then(|value| value.to_str()));
+    let name = match extension {
         Some(extension) => format!("{stem}{suffix}.{extension}"),
         None => format!("{stem}{suffix}"),
     };
 
     source.with_file_name(name)
+}
+
+/// The extension a converted image file will carry.
+fn image_output_extension(source: &Path, options: &ConvertOptions) -> Option<&'static str> {
+    match options.format {
+        TargetFormat::Keep => source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .and_then(ImageFormat::from_extension)
+            .map(extension_for),
+        TargetFormat::Jpeg => Some("jpg"),
+        TargetFormat::Png => Some("png"),
+        TargetFormat::Webp => Some("webp"),
+    }
 }
 
 fn display_name(path: &Path) -> String {

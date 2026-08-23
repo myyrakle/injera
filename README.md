@@ -9,7 +9,7 @@
 - Browse folders in the app, without depending on a native folder dialog.
 - Pick exactly the files to rename with multi-select, or take the whole folder at once.
 - See the first image inside each `.zip` or `.cbz` as a thumbnail, so archives are recognisable.
-- Clone a `.zip`/`.cbz` with its images re-encoded, to shrink an archive without touching the original.
+- Re-encode images, either on their own or inside a `.zip`/`.cbz`, writing a new file and leaving the original alone.
 - Reopen the folder you were last browsing.
 - Preview every rename before applying changes.
 - Rename files to natural-sort sequence names such as `00001.jpg`.
@@ -56,10 +56,17 @@ Files ending in `.zip` or `.cbz` are read for their first image, in natural orde
 and it is shown as a thumbnail. Archives holding no image, or whose first image is larger than 12 MB,
 fall back to a plain placeholder. Thumbnails load only as rows scroll into view.
 
-## Converting Archives
+## Converting Images
 
-The **Convert** mode writes a compressed copy of each selected archive and never modifies the
-original. `volume-1.cbz` becomes `volume-1-compressed.cbz` beside it.
+The **Convert** mode writes a converted copy of everything selected and never modifies the original.
+It takes both kinds of input:
+
+- An **archive** (`.zip`, `.cbz`) is cloned with every image inside it re-encoded.
+  `volume-1.cbz` becomes `volume-1-compressed.cbz`.
+- An **image file** is re-encoded on its own, taking the extension of the chosen format.
+  `cover.png` becomes `cover-compressed.jpg` when the format is JPEG.
+
+Both can be selected together. Anything else in the selection is left out.
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -67,9 +74,10 @@ original. `volume-1.cbz` becomes `volume-1-compressed.cbz` beside it.
 | Quality | `80` | JPEG quality, 1-100. PNG and WebP output is lossless, so the field is disabled for them. |
 | Suffix | `-compressed` | Appended to the file stem to name the clone. Path separators are rejected. |
 
-Non-image entries are copied through byte for byte, and an image that cannot be decoded is copied
-unchanged rather than failing the archive. Entries above 64 MB are copied without decoding. The run
-stops if a clone name already exists, so nothing is overwritten.
+Inside an archive, non-image entries are copied through byte for byte, an image that cannot be
+decoded is copied unchanged rather than failing the archive, and entries above 64 MB are copied
+without decoding. A standalone image that cannot be decoded is reported instead. The run stops if an
+output name already exists or if two sources resolve to the same name, so nothing is overwritten.
 
 ## Sequence Options
 
