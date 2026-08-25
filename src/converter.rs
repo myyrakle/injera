@@ -1,10 +1,12 @@
 //! Cloning an archive with its images re-encoded at a chosen format and quality.
 
 use std::fs;
-use std::io::{self, Cursor, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use image::{DynamicImage, ImageEncoder, ImageFormat};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::browser::{is_archive, is_image_file};
@@ -82,6 +84,8 @@ pub struct ConvertReport {
     pub images_converted: usize,
     /// Images that could not be decoded or encoded, copied through unchanged.
     pub images_skipped: usize,
+    /// Images whose re-encode came out larger, so the original was kept.
+    pub images_kept: usize,
     /// Non-image entries copied verbatim.
     pub entries_copied: usize,
     pub source_bytes: u64,
@@ -157,10 +161,24 @@ pub fn plan_conversion(
     Ok(ConvertPlan { entries })
 }
 
+/// Reports how far through an entry the conversion is.
+pub type ProgressFn<'a> = &'a (dyn Fn(usize, usize) + Sync);
+
 /// Writes `entry.output`, leaving `entry.source` untouched.
 pub fn convert_entry(
     entry: &ConvertEntry,
     options: &ConvertOptions,
+) -> Result<ConvertReport, ConvertError> {
+    convert_entry_with_progress(entry, options, &|_, _| {})
+}
+
+/// Same as [`convert_entry`], reporting `(done, total)` as images complete.
+///
+/// The callback runs on worker threads, so it must be cheap and thread safe.
+pub fn convert_entry_with_progress(
+    entry: &ConvertEntry,
+    options: &ConvertOptions,
+    progress: ProgressFn<'_>,
 ) -> Result<ConvertReport, ConvertError> {
     validate_options(options)?;
 
@@ -171,8 +189,12 @@ pub fn convert_entry(
     }
 
     match entry.kind {
-        ConvertKind::Archive => convert_archive(entry, options),
-        ConvertKind::Image => convert_image_file(entry, options),
+        ConvertKind::Archive => convert_archive(entry, options, progress),
+        ConvertKind::Image => {
+            let report = convert_image_file(entry, options)?;
+            progress(1, 1);
+            Ok(report)
+        }
     }
 }
 
@@ -197,6 +219,7 @@ fn convert_image_file(
         output_name: entry.output_name.clone(),
         images_converted: 1,
         images_skipped: 0,
+        images_kept: 0,
         entries_copied: 0,
         source_bytes,
         output_bytes: data.len() as u64,
@@ -205,57 +228,80 @@ fn convert_image_file(
 
 /// Clones the archive with every image inside it re-encoded.
 ///
-/// Entries that cannot be decoded are copied through unchanged so a single bad
-/// image never costs the rest of the archive.
+/// Entries are read in order, converted across all cores, then written back in
+/// their original order. Only one batch is held in memory at a time, so a large
+/// archive does not have to fit in RAM.
+///
+/// An image that cannot be decoded is copied through unchanged, so a single bad
+/// page never costs the rest of the archive.
 fn convert_archive(
     entry: &ConvertEntry,
     options: &ConvertOptions,
+    progress: ProgressFn<'_>,
 ) -> Result<ConvertReport, ConvertError> {
-    if entry.output.exists() {
-        return Err(ConvertError::Rejected {
-            message: format!("{} already exists", display_name(&entry.output)),
-        });
-    }
-
     let source_bytes = fs::metadata(&entry.source).map_err(ConvertError::Io)?.len();
     let file = fs::File::open(&entry.source).map_err(ConvertError::Io)?;
     let mut zip = zip::ZipArchive::new(file).map_err(archive_error)?;
 
-    let mut buffer = Cursor::new(Vec::new());
+    let indices = (0..zip.len())
+        .filter(|index| {
+            zip.name_for_index(*index)
+                .is_some_and(crate::browser::is_content_entry)
+        })
+        .collect::<Vec<_>>();
+    let total = indices.len();
+    let done = AtomicUsize::new(0);
+    progress(0, total);
+
     let mut report = ConvertReport {
         output: entry.output.clone(),
         output_name: entry.output_name.clone(),
         images_converted: 0,
         images_skipped: 0,
+        images_kept: 0,
         entries_copied: 0,
         source_bytes,
         output_bytes: 0,
     };
 
-    {
-        let mut writer = zip::ZipWriter::new(&mut buffer);
+    let output = fs::File::create(&entry.output).map_err(ConvertError::Io)?;
+    let mut writer = zip::ZipWriter::new(BufWriter::new(output));
 
-        for index in 0..zip.len() {
+    // Two batches per thread keeps every core fed without holding the whole
+    // archive in memory.
+    let batch = rayon::current_num_threads().max(1) * 2;
+
+    for chunk in indices.chunks(batch) {
+        let mut raw = Vec::with_capacity(chunk.len());
+
+        for &index in chunk {
             let mut source_entry = zip.by_index(index).map_err(archive_error)?;
             let name = source_entry.name().to_string();
-
-            if !crate::browser::is_content_entry(&name) {
-                continue;
-            }
-
-            let mut bytes = Vec::with_capacity(source_entry.size() as usize);
+            let size = source_entry.size();
+            let mut bytes = Vec::with_capacity(size as usize);
             source_entry
                 .read_to_end(&mut bytes)
                 .map_err(ConvertError::Io)?;
+            raw.push((name, bytes, size));
+        }
 
-            let converted = if source_entry.size() <= MAX_SOURCE_IMAGE_BYTES {
-                convert_image(&bytes, options)
-            } else {
-                None
-            };
+        let converted = raw
+            .into_par_iter()
+            .map(|(name, bytes, size)| {
+                let outcome = if size <= MAX_SOURCE_IMAGE_BYTES {
+                    reencode(&name, &bytes, options)
+                } else {
+                    Outcome::Copied
+                };
 
-            match converted {
-                Some((data, extension)) => {
+                progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
+                (name, bytes, outcome)
+            })
+            .collect::<Vec<_>>();
+
+        for (name, bytes, outcome) in converted {
+            match outcome {
+                Outcome::Converted(data, extension) => {
                     report.images_converted += 1;
                     write_entry(
                         &mut writer,
@@ -264,27 +310,58 @@ fn convert_archive(
                         true,
                     )?;
                 }
-                None => {
-                    if crate::browser::is_image_entry(&name) {
-                        report.images_skipped += 1;
-                    } else {
-                        report.entries_copied += 1;
-                    }
-
-                    let store = crate::browser::is_image_entry(&name);
-                    write_entry(&mut writer, &name, &bytes, store)?;
+                Outcome::Kept => {
+                    report.images_kept += 1;
+                    write_entry(&mut writer, &name, &bytes, true)?;
+                }
+                Outcome::Undecodable => {
+                    report.images_skipped += 1;
+                    write_entry(&mut writer, &name, &bytes, true)?;
+                }
+                Outcome::Copied => {
+                    report.entries_copied += 1;
+                    write_entry(&mut writer, &name, &bytes, false)?;
                 }
             }
         }
-
-        writer.finish().map_err(archive_error)?;
     }
 
-    let data = buffer.into_inner();
-    report.output_bytes = data.len() as u64;
-    fs::write(&entry.output, &data).map_err(ConvertError::Io)?;
+    let mut buffered = writer.finish().map_err(archive_error)?;
+    buffered.flush().map_err(ConvertError::Io)?;
+    drop(buffered);
+
+    report.output_bytes = fs::metadata(&entry.output).map_err(ConvertError::Io)?.len();
+    progress(total, total);
 
     Ok(report)
+}
+
+enum Outcome {
+    Converted(Vec<u8>, &'static str),
+    /// Re-encoding made the image larger, so the original bytes win.
+    Kept,
+    /// Not a decodable image; the original bytes are copied.
+    Undecodable,
+    /// Not an image at all.
+    Copied,
+}
+
+fn reencode(name: &str, bytes: &[u8], options: &ConvertOptions) -> Outcome {
+    if !crate::browser::is_image_entry(name) {
+        return Outcome::Copied;
+    }
+
+    let Some((data, extension)) = convert_image(bytes, options) else {
+        return Outcome::Undecodable;
+    };
+
+    // Keeping the original format is a request to shrink, not to rewrite, so a
+    // re-encode that grew is not worth taking. An explicit format change is.
+    if options.format == TargetFormat::Keep && data.len() >= bytes.len() {
+        return Outcome::Kept;
+    }
+
+    Outcome::Converted(data, extension)
 }
 
 #[derive(Debug)]
@@ -405,25 +482,15 @@ fn encode(image: &DynamicImage, format: ImageFormat, quality: u8) -> Option<Vec<
                 .ok()?;
         }
         ImageFormat::Png => {
-            let rgba = image.to_rgba8();
+            let (bytes, color) = opaque_or_alpha(image);
             image::codecs::png::PngEncoder::new(&mut out)
-                .write_image(
-                    rgba.as_raw(),
-                    rgba.width(),
-                    rgba.height(),
-                    image::ExtendedColorType::Rgba8,
-                )
+                .write_image(&bytes, image.width(), image.height(), color)
                 .ok()?;
         }
         ImageFormat::WebP => {
-            let rgba = image.to_rgba8();
+            let (bytes, color) = opaque_or_alpha(image);
             image::codecs::webp::WebPEncoder::new_lossless(&mut out)
-                .write_image(
-                    rgba.as_raw(),
-                    rgba.width(),
-                    rgba.height(),
-                    image::ExtendedColorType::Rgba8,
-                )
+                .write_image(&bytes, image.width(), image.height(), color)
                 .ok()?;
         }
         // Anything else keeps its original bytes.
@@ -431,6 +498,16 @@ fn encode(image: &DynamicImage, format: ImageFormat, quality: u8) -> Option<Vec<
     }
 
     Some(out)
+}
+
+/// Keeps an image at three channels unless it actually carries alpha.
+/// Promoting RGB to RGBA inflates the encoded file by a third for nothing.
+fn opaque_or_alpha(image: &DynamicImage) -> (Vec<u8>, image::ExtendedColorType) {
+    if image.color().has_alpha() {
+        (image.to_rgba8().into_raw(), image::ExtendedColorType::Rgba8)
+    } else {
+        (image.to_rgb8().into_raw(), image::ExtendedColorType::Rgb8)
+    }
 }
 
 fn extension_for(format: ImageFormat) -> &'static str {
@@ -453,7 +530,7 @@ fn replace_extension(name: &str, extension: &str) -> String {
 }
 
 fn write_entry(
-    writer: &mut zip::ZipWriter<&mut Cursor<Vec<u8>>>,
+    writer: &mut zip::ZipWriter<BufWriter<fs::File>>,
     name: &str,
     bytes: &[u8],
     store: bool,

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./styles.css";
 
@@ -77,11 +78,18 @@ type ConvertPlan = {
   entries: ConvertEntry[];
 };
 
+type ConvertProgress = {
+  name: string;
+  done: number;
+  total: number;
+};
+
 type ConvertReport = {
   output: string;
   output_name: string;
   images_converted: number;
   images_skipped: number;
+  images_kept: number;
   entries_copied: number;
   source_bytes: number;
   output_bytes: number;
@@ -279,6 +287,13 @@ app.innerHTML = `
             <button class="button danger" id="apply" type="button">Apply</button>
           </div>
 
+          <div class="progress" id="progress" hidden>
+            <div class="progress-track">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <span class="progress-label" id="progress-label"></span>
+          </div>
+
           <div class="table-wrap plan-wrap">
             <table>
               <thead>
@@ -342,6 +357,9 @@ const el = {
   panelTitle: required<HTMLHeadingElement>("#panel-title"),
   selectAll: required<HTMLInputElement>("#select-all"),
   rows: required<HTMLTableSectionElement>("#rows"),
+  progress: required<HTMLDivElement>("#progress"),
+  progressFill: required<HTMLDivElement>("#progress-fill"),
+  progressLabel: required<HTMLSpanElement>("#progress-label"),
 };
 
 function setState(patch: Partial<State>) {
@@ -775,6 +793,16 @@ async function previewRename() {
   }
 }
 
+/// Draws the bar, or hides it when `percent` is null.
+function showProgress(percent: number | null, label = "") {
+  el.progress.hidden = percent === null;
+
+  if (percent !== null) {
+    el.progressFill.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    el.progressLabel.textContent = label;
+  }
+}
+
 async function runConversion() {
   const entries = (state.conversion?.entries ?? []).filter((entry) => entry.selected);
   const options = convertOptions();
@@ -788,15 +816,27 @@ async function runConversion() {
   let done = 0;
   let saved = 0;
 
+  // Progress inside the running entry, so the bar moves during a long archive.
+  const onProgress = (progress: ConvertProgress) => {
+    const within = progress.total > 0 ? progress.done / progress.total : 0;
+    const percent = ((done + within) / entries.length) * 100;
+    const counter = entries.length > 1 ? ` (${done + 1}/${entries.length})` : "";
+    showProgress(percent, `${Math.floor(percent)}% · ${progress.name}${counter}`);
+    el.status.textContent = `Converting ${progress.name} · ${Math.floor(percent)}%`;
+  };
+
+  const stop = await listen<ConvertProgress>("convert://progress", (event) =>
+    onProgress(event.payload),
+  );
+
   try {
+    showProgress(0, "0%");
+
     for (const entry of entries) {
-      setState({
-        message: `Converting ${entry.source_name} (${done + 1}/${entries.length})`,
-        messageKind: "idle",
-      });
       const report = await invoke<ConvertReport>("convert_entry", { entry, options });
       done += 1;
       saved += report.source_bytes - report.output_bytes;
+      showProgress((done / entries.length) * 100, `${Math.round((done / entries.length) * 100)}%`);
     }
 
     const change =
@@ -811,9 +851,13 @@ async function runConversion() {
   } catch (error) {
     setState({
       busy: false,
-      message: done > 0 ? `${done} cloned, then failed: ${error}` : String(error),
+      message: done > 0 ? `${done} converted, then failed: ${error}` : String(error),
       messageKind: "error",
     });
+  } finally {
+    // Clear the bar first, so a failing unlisten cannot strand it on screen.
+    showProgress(null);
+    stop();
   }
 }
 

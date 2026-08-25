@@ -207,6 +207,35 @@ input {
   font-size: 12px;
 }
 
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-track {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #e3eaef;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 4px;
+  background: #2f6f73;
+  transition: width 120ms linear;
+}
+
+.progress-label {
+  color: #526173;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .plan-wrap {
   flex: 1;
   min-height: 120px;

@@ -74,6 +74,13 @@ Both can be selected together. Anything else in the selection is left out.
 | Quality | `80` | JPEG quality, 1-100. PNG and WebP output is lossless, so the field is disabled for them. |
 | Suffix | `-compressed` | Appended to the file stem to name the clone. Path separators are rejected. |
 
+Images are converted across all cores, a batch at a time, so a large archive never has to fit in
+memory. Progress is reported per image while a run is going.
+
+When the format is left at `Keep`, a re-encode that came out larger is thrown away and the original
+bytes are kept, so shrinking an archive can never grow it. Asking for a specific format always
+converts, since that is an explicit instruction.
+
 Inside an archive, non-image entries are copied through byte for byte, an image that cannot be
 decoded is copied unchanged rather than failing the archive, and entries above 64 MB are copied
 without decoding. A standalone image that cannot be decoded is reported instead. The run stops if an

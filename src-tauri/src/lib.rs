@@ -5,9 +5,19 @@ use injera::browser::{
     list_directory as list_directory_entries,
 };
 use injera::converter::{
-    ConvertEntry, ConvertOptions, ConvertPlan, ConvertReport, convert_entry as convert_one,
-    plan_conversion,
+    ConvertEntry, ConvertOptions, ConvertPlan, ConvertReport,
+    convert_entry_with_progress as convert_one, plan_conversion,
 };
+use serde::Serialize;
+use tauri::Emitter;
+
+/// Progress within a single entry, emitted as `convert://progress`.
+#[derive(Clone, Serialize)]
+struct ConvertProgress {
+    name: String,
+    done: usize,
+    total: usize,
+}
 use injera::renamer::{
     RenamePlan, RenameReport, SequenceOptions, apply_rename_plan, plan_regex_rename_for_files,
     plan_sequence_rename_for_files,
@@ -64,14 +74,29 @@ async fn preview_conversion(
 /// shows up while a long batch runs.
 #[tauri::command]
 async fn convert_entry(
+    app: tauri::AppHandle,
     entry: ConvertEntry,
     options: Option<ConvertOptions>,
 ) -> Result<ConvertReport, String> {
     let options = options.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || convert_one(&entry, &options))
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
+    let name = entry.source_name.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        convert_one(&entry, &options, &|done, total| {
+            // A dropped progress event only costs a stale percentage.
+            let _ = app.emit(
+                "convert://progress",
+                ConvertProgress {
+                    name: name.clone(),
+                    done,
+                    total,
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

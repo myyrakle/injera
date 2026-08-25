@@ -27,6 +27,7 @@ image = { version = "0.25.10", default-features = false, features = [
     "png",
     "webp",
 ] }
+rayon = "1.12.0"
 regex = "1.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
 # Read-only archive support, restricted to the pure-Rust decoders.
@@ -36,6 +37,19 @@ zip = { version = "8.6.0", default-features = false, features = [
     "bzip2",
     "lzma",
 ] }
+
+# Image codecs are unusably slow when built without optimisation, and the dev
+# profile is what `tauri dev` runs. Optimise dependencies while keeping the
+# workspace crates debuggable.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.injera]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
 
 [dev-dependencies]
 serde_json = "1.0.145"
