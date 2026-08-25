@@ -164,12 +164,23 @@ The unsigned APK and AAB are written under:
 src-tauri/gen/android/app/build/outputs/
 ```
 
-### Android Limitation
+### Android Storage Access
+
+An Android app's own storage holds none of the user's archives, and reading anything else needs
+permission. Without it every listing fails with `os error 13`, so the app asks on first launch:
+
+- **API 30 and up** need *All files access*, which is a Settings screen rather than a dialog. The app
+  opens it once per launch; granting it there and returning makes the whole device readable.
+- **API 29 and below** get the ordinary read permission dialog.
+
+The browser starts at `/storage/emulated/0` on Android rather than the app sandbox. A folder that is
+still out of reach reports which folder it was and what to do, instead of a bare error number.
+
+*All files access* is restricted on the Play Store. It suits a sideloaded build; a store release
+would have to move to the Storage Access Framework instead.
 
 `tauri-plugin-dialog` returns `FolderPickerNotImplemented` for directory dialogs on Android and iOS,
-so the **Choose** button does not work there. The in-app browser is the way in on mobile. Android
-scoped storage still governs which folders the app may read, so folders outside the app's own storage
-may list as unreadable until the platform grants access.
+so the **Choose** button does not work there. The in-app browser is the way in on mobile.
 
 ## iOS Build
 

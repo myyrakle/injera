@@ -52,6 +52,16 @@ pub struct ArchivePreview {
 
 /// Directory the browser opens on first launch.
 pub fn default_directory() -> PathBuf {
+    // An Android app's HOME is its own sandbox, which holds none of the user's
+    // files. Shared storage is where the archives actually are.
+    #[cfg(target_os = "android")]
+    for candidate in ["/storage/emulated/0", "/sdcard"] {
+        let path = PathBuf::from(candidate);
+        if path.is_dir() {
+            return path;
+        }
+    }
+
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
@@ -59,12 +69,29 @@ pub fn default_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Turns a bare `os error 13` into something that says what to do about it.
+fn explain(directory: &Path, error: io::Error) -> io::Error {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        return io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "{} cannot be read. Grant this app access to the folder and try again.",
+                directory.display()
+            ),
+        );
+    }
+
+    error
+}
+
 /// Lists the sub-directories and files of `directory` in natural order.
 ///
 /// Entries the process cannot stat are skipped rather than failing the listing,
 /// so an unreadable file does not hide the rest of the folder.
 pub fn list_directory(directory: &Path) -> io::Result<DirectoryListing> {
-    let path = directory.canonicalize()?;
+    let path = directory
+        .canonicalize()
+        .map_err(|error| explain(directory, error))?;
 
     if !path.is_dir() {
         return Err(io::Error::new(
@@ -76,7 +103,7 @@ pub fn list_directory(directory: &Path) -> io::Result<DirectoryListing> {
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    for entry in fs::read_dir(&path)? {
+    for entry in fs::read_dir(&path).map_err(|error| explain(&path, error))? {
         let Ok(entry) = entry else { continue };
         let Ok(file_type) = entry.file_type() else {
             continue;

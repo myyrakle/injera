@@ -141,6 +141,30 @@ fn first_archive_image_reports_a_broken_archive() {
     assert!(!error.to_string().is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn list_directory_explains_a_permission_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = test_dir("list_denied");
+    let locked = dir.join("locked");
+    fs::create_dir(&locked).expect("directory should be created");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000))
+        .expect("permissions should be set");
+
+    let error = list_directory(&locked).expect_err("an unreadable directory should fail");
+
+    // Restore before asserting, so a failure does not leave the tree unremovable.
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755))
+        .expect("permissions should be restored");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        error.to_string().contains("Grant this app access"),
+        "unhelpful message: {error}"
+    );
+}
+
 fn test_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("injera_browser_{name}_{}", std::process::id()));
