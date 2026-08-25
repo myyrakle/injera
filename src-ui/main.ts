@@ -165,7 +165,7 @@ if (!app) {
 
 app.innerHTML = `
   <main class="shell">
-    <section class="toolbar" aria-label="Rename controls">
+    <section class="toolbar" aria-label="Toolbar">
       <div class="brand">
         <span class="mark">
           <svg viewBox="0 0 48 48" role="img" aria-label="injera">
@@ -197,124 +197,124 @@ app.innerHTML = `
       </div>
 
       <div class="status" id="status" role="status">Loading</div>
+
+      <button class="button primary" id="open-sheet" type="button">Rename or convert</button>
     </section>
 
-    <div class="workspace">
-      <section class="panel browser" aria-label="File browser">
-        <div class="panel-head">
-          <h2>Files</h2>
-          <span id="selection-count">0 selected</span>
-        </div>
+    <section class="panel browser" aria-label="File browser">
+      <div class="panel-head">
+        <h2>Files</h2>
+        <span id="selection-count">0 selected</span>
+      </div>
 
-        <div class="path-row">
-          <button class="button ghost" id="up" type="button" title="Parent folder">Up</button>
-          <button class="button ghost" id="home" type="button" title="Home folder">Home</button>
-          <input id="path" readonly aria-label="Current folder" />
-          <button class="button secondary" id="choose-directory" type="button">Choose</button>
-        </div>
+      <div class="path-row">
+        <button class="button ghost" id="up" type="button" title="Parent folder">Up</button>
+        <button class="button ghost" id="home" type="button" title="Home folder">Home</button>
+        <input id="path" readonly aria-label="Current folder" />
+        <button class="button secondary" id="choose-directory" type="button">Choose</button>
+      </div>
 
-        <div class="path-row secondary-row">
-          <button class="button ghost" id="select-all-files" type="button">Select all</button>
-          <button class="button ghost" id="clear-selection" type="button">Clear</button>
-          <span class="hint" id="folder-summary"></span>
-        </div>
+      <div class="path-row secondary-row">
+        <button class="button ghost" id="select-all-files" type="button">Select all</button>
+        <button class="button ghost" id="clear-selection" type="button">Clear</button>
+        <span class="hint" id="folder-summary"></span>
+      </div>
 
-        <div class="browser-body" id="browser-body">
-          <ul class="folder-list" id="folders"></ul>
-          <table class="file-table">
-            <tbody id="files"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="panel" aria-label="Rename settings">
-        <div class="panel-head">
-          <h2 id="panel-title">Rename</h2>
-          <span id="preview-count">No preview</span>
-        </div>
-
-        <div class="panel-body">
-          <div class="mode-row" role="group" aria-label="Rename mode">
-            <button class="segment" id="mode-sequence" type="button">Sequence</button>
-            <button class="segment" id="mode-regex" type="button">Regex</button>
-            <button class="segment" id="mode-convert" type="button">Convert</button>
-          </div>
-
-          <div class="fields sequence-controls" id="sequence-controls">
-            <label class="field">
-              <span>Prefix</span>
-              <input id="prefix" placeholder="none" />
-            </label>
-            <label class="field">
-              <span>Start number</span>
-              <input id="start" inputmode="numeric" placeholder="1" />
-            </label>
-            <label class="field">
-              <span>Padding</span>
-              <input id="padding" inputmode="numeric" placeholder="auto" />
-            </label>
-          </div>
-
-          <div class="fields regex-controls" id="regex-controls">
-            <label class="field">
-              <span>Pattern</span>
-              <input id="pattern" placeholder="^IMG_(\\d+)\\.(jpg|png)$" />
-            </label>
-            <label class="field">
-              <span>Replacement</span>
-              <input id="replacement" placeholder="photo-$1.$2" />
-            </label>
-          </div>
-
-          <div class="fields convert-controls" id="convert-controls">
-            <label class="field">
-              <span>Image format</span>
-              <select id="format">
-                <option value="keep">Keep original</option>
-                <option value="jpeg">JPEG</option>
-                <option value="png">PNG</option>
-                <option value="webp">WebP</option>
-              </select>
-            </label>
-            <label class="field">
-              <span>Quality</span>
-              <input id="quality" inputmode="numeric" value="80" />
-            </label>
-            <label class="field">
-              <span>Suffix</span>
-              <input id="suffix" value="-compressed" />
-            </label>
-          </div>
-
-          <div class="actions">
-            <button class="button danger" id="apply" type="button">Apply</button>
-          </div>
-
-          <div class="progress" id="progress" hidden>
-            <div class="progress-track">
-              <div class="progress-fill" id="progress-fill"></div>
-            </div>
-            <span class="progress-label" id="progress-label"></span>
-          </div>
-
-          <div class="table-wrap plan-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th class="select-cell">
-                    <input type="checkbox" id="select-all" aria-label="Rename every previewed file" />
-                  </th>
-                  <th>Current</th>
-                  <th>New</th>
-                </tr>
-              </thead>
-              <tbody id="rows"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-    </div>
+      <div class="browser-body" id="browser-body">
+        <ul class="folder-list" id="folders"></ul>
+        <table class="file-table">
+          <tbody id="files"></tbody>
+        </table>
+      </div>
+    </section>
   </main>
+
+  <dialog class="sheet" id="sheet" aria-label="Rename and convert">
+    <div class="sheet-head">
+      <h2 id="panel-title">Rename</h2>
+      <span id="preview-count">No preview</span>
+      <button class="button ghost" id="sheet-close" type="button">Close</button>
+    </div>
+
+    <div class="sheet-body">
+      <div class="mode-row" role="group" aria-label="Mode">
+        <button class="segment" id="mode-sequence" type="button">Sequence</button>
+        <button class="segment" id="mode-regex" type="button">Regex</button>
+        <button class="segment" id="mode-convert" type="button">Convert</button>
+      </div>
+
+      <div class="fields sequence-controls" id="sequence-controls">
+        <label class="field">
+          <span>Prefix</span>
+          <input id="prefix" placeholder="none" />
+        </label>
+        <label class="field">
+          <span>Start number</span>
+          <input id="start" inputmode="numeric" placeholder="1" />
+        </label>
+        <label class="field">
+          <span>Padding</span>
+          <input id="padding" inputmode="numeric" placeholder="auto" />
+        </label>
+      </div>
+
+      <div class="fields regex-controls" id="regex-controls">
+        <label class="field">
+          <span>Pattern</span>
+          <input id="pattern" placeholder="^IMG_(\\d+)\\.(jpg|png)$" />
+        </label>
+        <label class="field">
+          <span>Replacement</span>
+          <input id="replacement" placeholder="photo-$1.$2" />
+        </label>
+      </div>
+
+      <div class="fields convert-controls" id="convert-controls">
+        <label class="field">
+          <span>Image format</span>
+          <select id="format">
+            <option value="keep">Keep original</option>
+            <option value="jpeg">JPEG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Quality</span>
+          <input id="quality" inputmode="numeric" value="80" />
+        </label>
+        <label class="field">
+          <span>Suffix</span>
+          <input id="suffix" value="-compressed" />
+        </label>
+      </div>
+
+      <div class="table-wrap plan-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="select-cell">
+                <input type="checkbox" id="select-all" aria-label="Include every file" />
+              </th>
+              <th>Current</th>
+              <th>New</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="sheet-foot">
+      <div class="progress" id="progress" hidden>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <span class="progress-label" id="progress-label"></span>
+      </div>
+      <button class="button danger" id="apply" type="button">Apply</button>
+    </div>
+  </dialog>
 `;
 
 function required<T extends Element>(selector: string): T {
@@ -359,6 +359,9 @@ const el = {
   panelTitle: required<HTMLHeadingElement>("#panel-title"),
   selectAll: required<HTMLInputElement>("#select-all"),
   rows: required<HTMLTableSectionElement>("#rows"),
+  sheet: required<HTMLDialogElement>("#sheet"),
+  openSheet: required<HTMLButtonElement>("#open-sheet"),
+  sheetClose: required<HTMLButtonElement>("#sheet-close"),
   progress: required<HTMLDivElement>("#progress"),
   progressFill: required<HTMLDivElement>("#progress-fill"),
   progressLabel: required<HTMLSpanElement>("#progress-label"),
@@ -506,6 +509,10 @@ function update() {
   el.home.disabled = state.busy;
   el.chooseDirectory.disabled = state.busy;
   el.selectAllFiles.disabled = state.busy || files.length === 0;
+  el.openSheet.disabled = state.busy || state.selected.size === 0;
+  el.openSheet.textContent =
+    state.selected.size > 0 ? `Rename or convert (${state.selected.size})` : "Rename or convert";
+  el.sheetClose.disabled = state.busy;
   el.clearSelection.disabled = state.busy || state.selected.size === 0;
 
   el.modeSequence.classList.toggle("active", state.mode === "sequence");
@@ -920,6 +927,7 @@ async function applyRename() {
     const report = await invoke<RenameReport>("apply_rename", { plan: state.plan });
     const directory = state.listing?.path ?? null;
     setState({ busy: false, applied: true });
+    el.sheet.close();
     await openDirectory(directory, `${report.renamed_count} files renamed`);
     setState({ message: `${report.renamed_count} files renamed`, messageKind: "success" });
   } catch (error) {
@@ -951,6 +959,30 @@ function escapeHtml(value: string) {
 function escapeAttribute(value: string) {
   return escapeHtml(value);
 }
+
+function openSheet() {
+  if (state.selected.size === 0 || el.sheet.open) {
+    return;
+  }
+
+  el.sheet.showModal();
+  void refreshPlan();
+}
+
+function closeSheet() {
+  if (!state.busy) {
+    el.sheet.close();
+  }
+}
+
+el.openSheet.addEventListener("click", openSheet);
+el.sheetClose.addEventListener("click", closeSheet);
+// Escape reaches the dialog directly, so block it mid-run.
+el.sheet.addEventListener("cancel", (event) => {
+  if (state.busy) {
+    event.preventDefault();
+  }
+});
 
 el.up.addEventListener("click", () => {
   if (state.listing?.parent) {

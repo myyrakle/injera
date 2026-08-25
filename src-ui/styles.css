@@ -30,7 +30,7 @@ input {
 }
 
 .shell {
-  width: min(1320px, 100%);
+  width: min(1100px, 100%);
   height: 100vh;
   margin: 0 auto;
   padding: 20px;
@@ -39,12 +39,71 @@ input {
   gap: 14px;
 }
 
-.workspace {
+.browser {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+}
+
+/* The settings and the action live in a dialog, so the action is always in
+   reach instead of sitting under a long file list. */
+.sheet {
+  width: min(860px, 92vw);
+  max-height: 86vh;
+  padding: 0;
+  border: 1px solid #cdd7df;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1b2430;
+  box-shadow: 0 24px 60px rgba(21, 32, 43, 0.28);
+  overflow: hidden;
+}
+
+.sheet[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.sheet::backdrop {
+  background: rgba(21, 32, 43, 0.45);
+}
+
+.sheet-head {
+  min-height: 54px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #d8e0e7;
+}
+
+.sheet-head span {
+  margin-left: auto;
+  color: #637283;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.sheet-foot {
+  display: flex;
+  align-items: center;
   gap: 14px;
+  padding: 12px 14px;
+  border-top: 1px solid #d8e0e7;
+  background: #fafcfd;
+}
+
+.sheet-foot .button {
+  margin-left: auto;
 }
 
 .panel {
@@ -205,6 +264,11 @@ input {
   display: block;
   color: #7b8899;
   font-size: 12px;
+}
+
+.sheet-foot .progress {
+  flex: 1;
+  min-width: 0;
 }
 
 .progress {
@@ -524,21 +588,6 @@ th {
   text-align: center;
 }
 
-@media (max-width: 1000px) {
-  .shell {
-    height: auto;
-    min-height: 100vh;
-  }
-
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .browser-body {
-    max-height: 50vh;
-  }
-}
-
 @media (max-width: 680px) {
   .shell {
     padding: 12px;
@@ -551,6 +600,14 @@ th {
   .toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .sheet {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 92vh;
+    margin: auto 0 0;
+    border-radius: 10px 10px 0 0;
   }
 
   .status {

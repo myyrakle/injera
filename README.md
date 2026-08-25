@@ -36,6 +36,8 @@ make check    # formatting, clippy, tests, and the frontend build, as CI runs th
 The app opens on your home folder and lists that folder's sub-folders and files in natural order, so
 `scan-2.jpg` comes before `scan-10.jpg`.
 
+- **Rename or convert** in the toolbar opens the settings over the list, so the action button is
+  always one click away instead of below however many files the folder holds.
 - **Up** and **Home** move between folders; clicking a folder row enters it.
 - **Choose** opens the native folder dialog on desktop as a shortcut.
 - Tick the files to rename, or use **Select all**. Only the ticked files are renamed, and the
