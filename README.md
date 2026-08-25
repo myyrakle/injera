@@ -21,25 +21,15 @@
 
 ## Development
 
-Install JavaScript dependencies:
+`make` lists every target. The npm scripts underneath still work if you prefer them.
 
 ```bash
-npm install
+make          # list the targets
+make dev      # run the desktop app with hot reload
+make check    # formatting, clippy, tests, and the frontend build, as CI runs them
 ```
 
-Run the desktop app in development mode:
-
-```bash
-npm run tauri:dev
-```
-
-Run checks:
-
-```bash
-cargo fmt --check
-cargo test --workspace
-npm run build
-```
+`make lint` pins the same toolchain as the lint workflow, so a green `make check` means a green CI.
 
 ## Browsing And Selecting
 
@@ -140,16 +130,20 @@ target/release/bundle/
 
 ## Android Build
 
+`ANDROID_HOME` and `NDK_HOME` must be set; the Android targets check for them up front rather than
+failing deep inside Gradle.
+
 Initialize the Android project if it has not been generated yet:
 
 ```bash
-npm run tauri:android:init
+make android-init
 ```
 
 Build Android artifacts:
 
 ```bash
-npm run tauri:android:build
+make android
+make android-artifacts   # list what came out
 ```
 
 The unsigned APK and AAB are written under:

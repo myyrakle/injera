@@ -21,25 +21,15 @@
 
 ## 개발
 
-JavaScript 의존성 설치:
+`make`를 치면 전체 타깃이 나옵니다. 기존 npm 스크립트도 그대로 쓸 수 있습니다.
 
 ```bash
-npm install
+make          # 타깃 목록
+make dev      # 데스크탑 앱 개발 모드 실행
+make check    # 포맷·clippy·테스트·프론트엔드 빌드 (CI와 동일)
 ```
 
-데스크탑 앱 개발 모드 실행:
-
-```bash
-npm run tauri:dev
-```
-
-검증:
-
-```bash
-cargo fmt --check
-cargo test --workspace
-npm run build
-```
+`make lint`은 lint 워크플로와 같은 툴체인을 고정해서 씁니다. `make check`가 통과하면 CI도 통과합니다.
 
 ## 탐색과 선택
 
@@ -137,16 +127,20 @@ target/release/bundle/
 
 ## Android 빌드
 
+`ANDROID_HOME`과 `NDK_HOME`이 설정되어 있어야 합니다. Android 타깃은 Gradle 안쪽에서 실패하지 않도록
+먼저 이 값들을 확인합니다.
+
 Android 프로젝트가 아직 생성되지 않았다면 초기화합니다.
 
 ```bash
-npm run tauri:android:init
+make android-init
 ```
 
 Android 산출물 빌드:
 
 ```bash
-npm run tauri:android:build
+make android
+make android-artifacts   # 생성된 산출물 목록
 ```
 
 unsigned APK와 AAB는 다음 위치에 생성됩니다.
