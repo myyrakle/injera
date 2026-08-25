@@ -11,6 +11,7 @@ LINT_TOOLCHAIN ?= 1.92
 CARGO_LINT := cargo +$(LINT_TOOLCHAIN)
 
 ANDROID_OUT := src-tauri/gen/android/app/build/outputs
+ANDROID_APK := $(ANDROID_OUT)/apk/universal/release/injera-universal-debugsigned.apk
 DESKTOP_OUT := target/release/bundle
 
 .PHONY: help
@@ -89,6 +90,28 @@ android: android-env deps ## Build the unsigned Android APK and AAB
 .PHONY: android-dev
 android-dev: android-env deps ## Run on a connected device or emulator
 	npm run tauri:android:dev
+
+# The release APK Gradle produces is unsigned, and Android refuses to install
+# an unsigned package. Sign it with the local debug key just to try it out;
+# a store build needs a real keystore.
+.PHONY: android-sign
+android-sign: android-env ## Sign the built APK with the debug key so it can be installed
+	@set -e; \
+	out="src-tauri/gen/android/app/build/outputs/apk/universal/release"; \
+	unsigned="$$out/app-universal-release-unsigned.apk"; \
+	test -f "$$unsigned" || { echo "no APK yet; run make android"; exit 1; }; \
+	test -f "$$HOME/.android/debug.keystore" || { echo "no debug keystore at ~/.android/debug.keystore"; exit 1; }; \
+	tools=$$(ls -d "$$ANDROID_HOME"/build-tools/* | sort -V | tail -1); \
+	"$$tools/zipalign" -f -p 4 "$$unsigned" "$$out/aligned.tmp.apk"; \
+	"$$tools/apksigner" sign --ks "$$HOME/.android/debug.keystore" --ks-pass pass:android \
+		--ks-key-alias androiddebugkey --key-pass pass:android \
+		--out "$(ANDROID_APK)" "$$out/aligned.tmp.apk" 2>/dev/null; \
+	rm -f "$$out/aligned.tmp.apk" "$(ANDROID_APK).idsig"; \
+	echo "signed: $(ANDROID_APK)"
+
+.PHONY: android-install
+android-install: android-sign ## Install the signed APK on a connected device
+	adb install -r "$(ANDROID_APK)"
 
 .PHONY: android-artifacts
 android-artifacts: ## List what the last Android build produced

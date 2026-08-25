@@ -145,6 +145,16 @@ make android
 make android-artifacts   # 생성된 산출물 목록
 ```
 
+Gradle이 만드는 release APK는 서명이 없고, Android는 서명 없는 패키지를 설치하지 않습니다. 기기에서
+바로 확인하려면 로컬 debug 키로 서명하세요.
+
+```bash
+make android-sign      # unsigned APK 옆에 injera-universal-debugsigned.apk 생성
+make android-install   # 서명 후 adb로 설치
+```
+
+배포용 빌드에는 debug 키가 아니라 실제 keystore가 필요합니다.
+
 unsigned APK와 AAB는 다음 위치에 생성됩니다.
 
 ```text

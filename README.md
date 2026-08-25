@@ -148,6 +148,16 @@ make android
 make android-artifacts   # list what came out
 ```
 
+Gradle's release APK is unsigned, and Android will not install an unsigned package. To try it on a
+device, sign it with the local debug key:
+
+```bash
+make android-sign      # writes injera-universal-debugsigned.apk beside the unsigned one
+make android-install   # signs, then adb installs it
+```
+
+A build for distribution needs a real keystore, not the debug key.
+
 The unsigned APK and AAB are written under:
 
 ```text
