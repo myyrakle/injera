@@ -77,6 +77,9 @@ Both can be selected together. Anything else in the selection is left out.
 Images are converted across all cores, a batch at a time, so a large archive never has to fit in
 memory. Progress is reported per image while a run is going.
 
+Because the sources are left alone, the selection survives a run: change the quality or the suffix,
+preview again, and convert the same files a second time.
+
 When the format is left at `Keep`, a re-encode that came out larger is thrown away and the original
 bytes are kept, so shrinking an archive can never grow it. Asking for a specific format always
 converts, since that is an explicit instruction.

@@ -701,12 +701,25 @@ function renderPlanRows() {
     .join("");
 }
 
-async function openDirectory(path: string | null, message = "Ready") {
+/// Reloads a folder. `keepSelection` carries the current selection across the
+/// reload, for actions that leave their source files in place.
+async function openDirectory(path: string | null, message = "Ready", keepSelection = false) {
   setState({ busy: true, message: "Loading folder", messageKind: "idle" });
+  const previous = keepSelection ? new Set(state.selected) : null;
 
   try {
     const listing = await invoke<DirectoryListing>("list_directory", { path });
     state.selected.clear();
+
+    if (previous) {
+      // Only keep what is still there; a source can vanish between runs.
+      for (const file of listing.files) {
+        if (previous.has(file.path)) {
+          state.selected.add(file.path);
+        }
+      }
+    }
+
     rememberDirectory(listing.path);
     setState({
       listing,
@@ -722,7 +735,7 @@ async function openDirectory(path: string | null, message = "Ready") {
   } catch (error) {
     if (path !== null) {
       // A remembered folder can be renamed or unplugged; fall back to home.
-      await openDirectory(null, message);
+      await openDirectory(null, message, keepSelection);
       return;
     }
 
@@ -843,7 +856,9 @@ async function runConversion() {
       saved >= 0 ? `${formatSize(saved)} saved` : `${formatSize(-saved)} larger`;
     const noun = done === 1 ? "file" : "files";
     setState({ busy: false, applied: true });
-    await openDirectory(state.listing?.path ?? null, "Ready");
+    // Conversion leaves its sources alone, so the selection is still valid and
+    // the run can be repeated with different settings.
+    await openDirectory(state.listing?.path ?? null, "Ready", true);
     setState({
       message: `${done} ${noun} converted · ${change}`,
       messageKind: "success",
