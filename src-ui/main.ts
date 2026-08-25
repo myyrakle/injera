@@ -273,7 +273,7 @@ app.innerHTML = `
                 <option value="keep">Keep original</option>
                 <option value="jpeg">JPEG</option>
                 <option value="png">PNG</option>
-                <option value="webp">WebP (lossless)</option>
+                <option value="webp">WebP</option>
               </select>
             </label>
             <label class="field">
@@ -514,8 +514,8 @@ function update() {
   el.sequenceControls.hidden = state.mode !== "sequence";
   el.regexControls.hidden = state.mode !== "regex";
   el.convertControls.hidden = state.mode !== "convert";
-  // Only JPEG output is lossy, so quality is inert for the other formats.
-  el.quality.disabled = el.format.value === "png" || el.format.value === "webp";
+  // PNG is lossless, so quality has nothing to act on there.
+  el.quality.disabled = el.format.value === "png";
   el.apply.textContent = state.mode === "convert" ? "Convert" : "Apply";
   el.panelTitle.textContent = state.mode === "convert" ? "Convert" : "Rename";
 

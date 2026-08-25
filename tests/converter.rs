@@ -405,6 +405,60 @@ fn convert_reports_progress_for_every_image() {
     assert_eq!(reached, [0, 1, 2, 3, 4]);
 }
 
+#[test]
+fn webp_output_shrinks_a_photographic_page() {
+    let dir = test_dir("convert_webp_lossy");
+    let archive = dir.join("volume-1.zip");
+    // A JPEG scan, the case that lossless WebP used to inflate.
+    write_archive(&archive, &[("page-1.jpg", jpeg(400, 400, 80))]);
+
+    let options = ConvertOptions {
+        format: TargetFormat::Webp,
+        quality: 60,
+        ..ConvertOptions::default()
+    };
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
+
+    assert_eq!(archive_names(&report.output), ["page-1.webp"]);
+    assert!(
+        report.output_bytes < report.source_bytes,
+        "expected webp to shrink the archive: {} -> {}",
+        report.source_bytes,
+        report.output_bytes
+    );
+}
+
+#[test]
+fn webp_quality_changes_the_size() {
+    let dir = test_dir("convert_webp_quality");
+    let source = dir.join("page.jpg");
+    fs::write(&source, jpeg(300, 300, 90)).expect("image should be created");
+
+    let low = convert_once(&source, TargetFormat::Webp, 30, "-low");
+    let high = convert_once(&source, TargetFormat::Webp, 90, "-high");
+    let lossless = convert_once(&source, TargetFormat::Webp, 100, "-lossless");
+
+    assert!(low < high, "quality 30 should beat 90: {low} vs {high}");
+    assert!(
+        high < lossless,
+        "quality 90 should beat lossless: {high} vs {lossless}"
+    );
+}
+
+fn convert_once(source: &Path, format: TargetFormat, quality: u8, suffix: &str) -> u64 {
+    let options = ConvertOptions {
+        format,
+        quality,
+        suffix: suffix.to_string(),
+    };
+    let plan = plan_conversion(std::slice::from_ref(&source.to_path_buf()), &options)
+        .expect("plan should succeed");
+    convert_entry(&plan.entries[0], &options)
+        .expect("conversion should succeed")
+        .output_bytes
+}
+
 fn test_dir(name: &str) -> PathBuf {
     let mut path = std::env::temp_dir();
     path.push(format!("injera_convert_{name}_{}", std::process::id()));

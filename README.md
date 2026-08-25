@@ -68,6 +68,11 @@ It takes both kinds of input:
 
 Both can be selected together. Anything else in the selection is left out.
 
+`WebP` compresses scanned pages far harder than `JPEG` does. On a ten page scan of 24.6 MB, `JPEG`
+at quality 75 gave 20.4 MB and `WebP` at the same quality gave 11.7 MB. Quality 100 asks for
+lossless WebP, which stores every pixel and will be *larger* than a lossy source: 39.0 MB for the
+same scan. Leave it below 100 unless lossless is what you want.
+
 The plan follows from what is ticked and what the settings say, and updates itself as either
 changes, so there is no preview step to press. An output name that is already taken, or two sources
 that resolve to the same name, mark those rows instead of stopping the batch; the rest still run.
@@ -75,7 +80,7 @@ that resolve to the same name, mark those rows instead of stopping the batch; th
 | Option | Default | Effect |
 | --- | --- | --- |
 | Image format | Keep original | `Keep` re-encodes each image in its own format. `JPEG`, `PNG`, and `WebP` convert every image, and the entry extension changes to match. |
-| Quality | `80` | JPEG quality, 1-100. PNG and WebP output is lossless, so the field is disabled for them. |
+| Quality | `80` | Quality for the lossy formats, 1-100. WebP treats 100 as lossless. PNG is always lossless, so the field is disabled for it. |
 | Suffix | `-compressed` | Appended to the file stem to name the clone. Path separators are rejected. |
 
 Images are converted across all cores, a batch at a time, so a large archive never has to fit in

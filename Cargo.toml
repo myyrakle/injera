@@ -19,7 +19,8 @@ resolver = "2"
 
 [dependencies]
 base64 = "0.23.1"
-# Pure-Rust codecs only, so mobile and CI builds need no C toolchain.
+# Decoding, plus PNG and JPEG encoding. WebP encoding goes through libwebp
+# instead, because this crate only writes WebP losslessly.
 image = { version = "0.25.10", default-features = false, features = [
     "bmp",
     "gif",
@@ -30,6 +31,7 @@ image = { version = "0.25.10", default-features = false, features = [
 rayon = "1.12.0"
 regex = "1.11.1"
 serde = { version = "1.0.228", features = ["derive"] }
+webp = "0.3.1"
 # Read-only archive support, restricted to the pure-Rust decoders.
 zip = { version = "8.6.0", default-features = false, features = [
     "deflate-flate2-zlib-rs",

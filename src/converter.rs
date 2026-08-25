@@ -23,7 +23,7 @@ pub enum TargetFormat {
     Keep,
     Jpeg,
     Png,
-    /// Lossless WebP; `quality` does not apply.
+    /// WebP. `quality` applies; 100 encodes losslessly.
     Webp,
 }
 
@@ -31,7 +31,8 @@ pub enum TargetFormat {
 #[serde(default)]
 pub struct ConvertOptions {
     pub format: TargetFormat,
-    /// JPEG quality, 1-100. Ignored by the lossless formats.
+    /// Quality for the lossy formats, 1-100. PNG ignores it, and WebP treats
+    /// 100 as lossless.
     pub quality: u8,
     /// Appended to the file stem to name the clone.
     pub suffix: String,
@@ -492,10 +493,20 @@ fn encode(image: &DynamicImage, format: ImageFormat, quality: u8) -> Option<Vec<
                 .ok()?;
         }
         ImageFormat::WebP => {
+            // image only writes lossless WebP, which inflates an already lossy
+            // scan, so encode through libwebp instead.
             let (bytes, color) = opaque_or_alpha(image);
-            image::codecs::webp::WebPEncoder::new_lossless(&mut out)
-                .write_image(&bytes, image.width(), image.height(), color)
-                .ok()?;
+            let encoder = if color == image::ExtendedColorType::Rgba8 {
+                webp::Encoder::from_rgba(&bytes, image.width(), image.height())
+            } else {
+                webp::Encoder::from_rgb(&bytes, image.width(), image.height())
+            };
+            let encoded = if quality >= 100 {
+                encoder.encode_lossless()
+            } else {
+                encoder.encode(f32::from(quality))
+            };
+            out.extend_from_slice(&encoded);
         }
         // Anything else keeps its original bytes.
         _ => return None,
