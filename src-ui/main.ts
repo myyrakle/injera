@@ -220,6 +220,11 @@ app.innerHTML = `
         <span class="hint" id="folder-summary"></span>
       </div>
 
+      <div class="notice" id="storage-notice" hidden>
+        This app has no access to your files, so folders look empty. Grant it
+        <strong>All files access</strong> in Settings, then reopen the app.
+      </div>
+
       <div class="browser-body" id="browser-body">
         <ul class="folder-list" id="folders"></ul>
         <table class="file-table">
@@ -338,6 +343,7 @@ const el = {
   folderSummary: required<HTMLSpanElement>("#folder-summary"),
   selectionCount: required<HTMLSpanElement>("#selection-count"),
   browserBody: required<HTMLDivElement>("#browser-body"),
+  storageNotice: required<HTMLDivElement>("#storage-notice"),
   folders: required<HTMLUListElement>("#folders"),
   files: required<HTMLTableSectionElement>("#files"),
   modeSequence: required<HTMLButtonElement>("#mode-sequence"),
@@ -735,7 +741,11 @@ function renderPlanRows() {
  * Reloads a folder. `keepSelection` carries the current selection across the
  * reload, for actions that leave their source files in place.
  */
-async function openDirectory(path: string | null, message = "Ready", keepSelection = false) {
+async function openDirectory(
+  path: string | null,
+  message = "Ready",
+  keepSelection = false,
+): Promise<boolean> {
   setState({ busy: true, message: "Loading folder", messageKind: "idle" });
   const previous = keepSelection ? new Set(state.selected) : null;
 
@@ -765,15 +775,36 @@ async function openDirectory(path: string | null, message = "Ready", keepSelecti
     renderBrowser();
     el.browserBody.scrollTop = 0;
     void refreshPlan();
+    return true;
   } catch (error) {
-    if (path !== null) {
-      // A remembered folder can be renamed or unplugged; fall back to home.
-      await openDirectory(null, message, keepSelection);
-      return;
-    }
-
+    // Say why. A folder the app may not read is the common case on Android,
+    // and silently bouncing back to the start looks like the tap did nothing.
     setState({ busy: false, message: String(error), messageKind: "error" });
+    return false;
   }
+}
+
+/**
+ * Android hands back an empty directory rather than an error when the storage
+ * grant is missing, so check for it and say so instead of showing empty folders.
+ */
+async function checkStorageAccess() {
+  try {
+    el.storageNotice.hidden = await invoke<boolean>("storage_access");
+  } catch {
+    el.storageNotice.hidden = true;
+  }
+}
+
+/** Reopens the remembered folder, falling back to home if it is gone. */
+async function openRememberedDirectory() {
+  const remembered = rememberedDirectory();
+
+  if (remembered && (await openDirectory(remembered))) {
+    return;
+  }
+
+  await openDirectory(null);
 }
 
 async function chooseDirectory() {
@@ -1090,4 +1121,6 @@ el.rows.addEventListener("change", (event) => {
 renderBrowser();
 renderPlanRows();
 update();
-void openDirectory(rememberedDirectory());
+// The access check writes a probe file into shared storage, so it has to
+// finish before the first listing or the probe shows up as a file.
+void checkStorageAccess().then(openRememberedDirectory);

@@ -69,6 +69,31 @@ pub fn default_directory() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Whether the app can actually reach the user's files.
+///
+/// Android does not report a missing storage grant as an error: it filters the
+/// contents out and hands back an empty directory, so a folder full of archives
+/// looks empty. The only dependable check is to try, which is also exactly the
+/// access renaming and converting need.
+pub fn has_storage_access() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        let root = default_directory();
+        let probe = root.join(format!(".injera-access-probe-{}", std::process::id()));
+
+        match fs::File::create(&probe) {
+            Ok(_) => {
+                let _ = fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    true
+}
+
 /// Turns a bare `os error 13` into something that says what to do about it.
 fn explain(directory: &Path, error: io::Error) -> io::Error {
     if error.kind() == io::ErrorKind::PermissionDenied {

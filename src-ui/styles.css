@@ -162,6 +162,16 @@ input {
   white-space: nowrap;
 }
 
+.notice {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid #f2ddb4;
+  background: #fdf6e3;
+  color: #7a5c17;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .browser-body {
   flex: 1;
   min-height: 0;

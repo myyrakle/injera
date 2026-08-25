@@ -173,8 +173,12 @@ permission. Without it every listing fails with `os error 13`, so the app asks o
   opens it once per launch; granting it there and returning makes the whole device readable.
 - **API 29 and below** get the ordinary read permission dialog.
 
-The browser starts at `/storage/emulated/0` on Android rather than the app sandbox. A folder that is
-still out of reach reports which folder it was and what to do, instead of a bare error number.
+The browser starts at `/storage/emulated/0` on Android rather than the app sandbox.
+
+Android does not report a missing grant as an error: it filters the contents out and returns an empty
+directory, so a folder full of archives simply looks empty. The app therefore checks its access by
+writing a probe file into shared storage and removing it, and shows a banner over the file list when
+that fails, rather than leaving you to guess why every folder is empty.
 
 *All files access* is restricted on the Play Store. It suits a sideloaded build; a store release
 would have to move to the Storage Access Framework instead.

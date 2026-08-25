@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use injera::browser::{
-    ArchivePreview, DirectoryListing, default_directory, first_archive_image,
+    ArchivePreview, DirectoryListing, default_directory, first_archive_image, has_storage_access,
     list_directory as list_directory_entries,
 };
 use injera::converter::{
@@ -22,6 +22,13 @@ use injera::renamer::{
     RenamePlan, RenameReport, SequenceOptions, apply_rename_plan, plan_regex_rename_for_files,
     plan_sequence_rename_for_files,
 };
+
+/// Whether the app can reach the user's files. False on Android until the
+/// storage grant is given.
+#[tauri::command]
+async fn storage_access() -> bool {
+    has_storage_access()
+}
 
 /// Lists a directory for the in-app browser. `path` is `None` on first load.
 #[tauri::command]
@@ -113,6 +120,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            storage_access,
             list_directory,
             archive_preview,
             preview_sequence,
