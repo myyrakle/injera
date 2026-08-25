@@ -65,6 +65,10 @@ pub struct ConvertEntry {
     pub output_name: String,
     #[serde(default = "selected_by_default")]
     pub selected: bool,
+    /// Why this entry cannot run, when it cannot. A blocked entry is never
+    /// selected, so one collision does not sink the rest of the batch.
+    #[serde(default)]
+    pub blocked: Option<String>,
 }
 
 fn selected_by_default() -> bool {
@@ -128,20 +132,16 @@ pub fn plan_conversion(
             ConvertKind::Image => image_output_extension(source, options),
         };
         let output = clone_path(source, &options.suffix, extension);
-
-        if output.exists() {
-            return Err(ConvertError::Rejected {
-                message: format!("{} already exists", display_name(&output)),
-            });
-        }
+        let blocked = output.exists().then(|| "already exists".to_string());
 
         entries.push(ConvertEntry {
             kind,
             source_name: display_name(source),
             output_name: display_name(&output),
             source: source.clone(),
+            selected: blocked.is_none(),
             output,
-            selected: true,
+            blocked,
         });
     }
 
@@ -150,11 +150,15 @@ pub fn plan_conversion(
         .map(|entry| entry.output.clone())
         .collect::<Vec<_>>();
 
-    for (index, output) in outputs.iter().enumerate() {
-        if outputs[index + 1..].iter().any(|other| other == output) {
-            return Err(ConvertError::Rejected {
-                message: format!("multiple files resolve to {}", display_name(output)),
-            });
+    for index in 0..entries.len() {
+        let collides = outputs
+            .iter()
+            .enumerate()
+            .any(|(other, output)| other != index && *output == outputs[index]);
+
+        if collides {
+            entries[index].blocked = Some("two files resolve to this name".to_string());
+            entries[index].selected = false;
         }
     }
 

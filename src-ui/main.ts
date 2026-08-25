@@ -72,6 +72,7 @@ type ConvertEntry = {
   output: string;
   output_name: string;
   selected: boolean;
+  blocked: string | null;
 };
 
 type ConvertPlan = {
@@ -95,13 +96,14 @@ type ConvertReport = {
   output_bytes: number;
 };
 
-/// One row of the plan table, whichever mode produced it.
+/** One row of the plan table, whichever mode produced it. */
 type PlanRow = {
   source: string;
   source_name: string;
   target: string;
   target_name: string;
   selected: boolean;
+  blocked: string | null;
 };
 
 type State = {
@@ -119,8 +121,10 @@ type State = {
 const MAX_PADDING = 20;
 const LAST_DIRECTORY_KEY = "injera:last-directory";
 
-/// The folder to reopen on launch. Browser storage can be unavailable, and the
-/// stored folder can be gone, so every read is best-effort.
+/**
+ * The folder to reopen on launch. Browser storage can be unavailable, and the
+ * stored folder can be gone, so every read is best-effort.
+ */
 function rememberedDirectory(): string | null {
   try {
     return localStorage.getItem(LAST_DIRECTORY_KEY);
@@ -283,7 +287,6 @@ app.innerHTML = `
           </div>
 
           <div class="actions">
-            <button class="button primary" id="preview" type="button">Preview</button>
             <button class="button danger" id="apply" type="button">Apply</button>
           </div>
 
@@ -351,7 +354,6 @@ const el = {
   padding: required<HTMLInputElement>("#padding"),
   pattern: required<HTMLInputElement>("#pattern"),
   replacement: required<HTMLInputElement>("#replacement"),
-  preview: required<HTMLButtonElement>("#preview"),
   apply: required<HTMLButtonElement>("#apply"),
   previewCount: required<HTMLSpanElement>("#preview-count"),
   panelTitle: required<HTMLHeadingElement>("#panel-title"),
@@ -376,7 +378,7 @@ function setState(patch: Partial<State>) {
   update();
 }
 
-/// The plan table rows for the active mode.
+/** The plan table rows for the active mode. */
 function planRows(): PlanRow[] {
   if (state.mode === "convert") {
     return (state.conversion?.entries ?? []).map((entry) => ({
@@ -385,14 +387,15 @@ function planRows(): PlanRow[] {
       target: entry.output,
       target_name: entry.output_name,
       selected: entry.selected,
+      blocked: entry.blocked,
     }));
   }
 
-  return state.plan?.entries ?? [];
+  return (state.plan?.entries ?? []).map((entry) => ({ ...entry, blocked: null }));
 }
 
-/// The entries backing `planRows`, so a checkbox can write its selection back.
-function planTargets(): Array<{ selected: boolean }> {
+/** The entries backing `planRows`, so a checkbox can write its selection back. */
+function planTargets(): Array<{ selected: boolean; blocked?: string | null }> {
   return state.mode === "convert"
     ? (state.conversion?.entries ?? [])
     : (state.plan?.entries ?? []);
@@ -402,8 +405,10 @@ function hasPlan(): boolean {
   return state.mode === "convert" ? state.conversion !== null : state.plan !== null;
 }
 
-/// Files eligible for the active mode. Convert handles archives and images;
-/// renaming handles anything.
+/**
+ * Files eligible for the active mode. Convert handles archives and images;
+ * renaming handles anything.
+ */
 function eligibleFiles(): string[] {
   return (state.listing?.files ?? [])
     .filter((file) => state.selected.has(file.path))
@@ -411,14 +416,18 @@ function eligibleFiles(): string[] {
     .map((file) => file.path);
 }
 
-/** Drops a preview that no longer matches the current inputs. */
-function invalidatePlan() {
-  if (state.plan === null && state.conversion === null && !state.applied) {
-    update();
-    return;
-  }
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+/** Bumped per request, so a slow plan cannot overwrite a newer one. */
+let previewToken = 0;
 
+/**
+ * Re-plans once the inputs settle. The plan follows from the selection and the
+ * settings, so there is nothing for the user to press.
+ */
+function schedulePreview() {
   setState({ plan: null, conversion: null, applied: false });
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(() => void refreshPlan(), 150);
 }
 
 function parseCount(value: string): number | null {
@@ -462,7 +471,7 @@ function sequenceOptions(): SequenceOptions | null {
   return { prefix, start, padding };
 }
 
-/// Returns the conversion options, or `null` when an input is not usable yet.
+/** Returns the conversion options, or `null` when an input is not usable yet. */
 function convertOptions(): ConvertOptions | null {
   const quality = parseCount(el.quality.value);
 
@@ -484,14 +493,7 @@ function planSelectedCount(): number {
 }
 
 function update() {
-  const inputsReady =
-    state.mode === "sequence"
-      ? sequenceOptions() !== null
-      : state.mode === "regex"
-        ? el.pattern.value.length > 0
-        : convertOptions() !== null;
   const files = state.listing?.files ?? [];
-  const eligible = eligibleFiles().length;
 
   el.status.textContent = state.message;
   el.status.className = `status status-${state.messageKind}`;
@@ -522,7 +524,6 @@ function update() {
     ? `${state.listing.directories.length} folders · ${files.length} files`
     : "";
 
-  el.preview.disabled = state.busy || eligible === 0 || !inputsReady;
 
   updatePlanUi();
 }
@@ -669,40 +670,64 @@ function paintThumbnail(cell: HTMLElement, dataUri: string | null) {
   }
 }
 
+/** Why the plan is empty, so the table can say so instead of sitting blank. */
+function planHint(): string {
+  if (eligibleFiles().length === 0) {
+    return state.mode === "convert"
+      ? "Tick the archives or images to convert."
+      : "Tick the files to rename.";
+  }
+
+  if (state.mode === "regex" && el.pattern.value.length === 0) {
+    return "Enter a pattern.";
+  }
+
+  if (state.mode === "sequence" && sequenceOptions() === null) {
+    return "Check the sequence settings.";
+  }
+
+  if (state.mode === "convert" && convertOptions() === null) {
+    return "Check the conversion settings.";
+  }
+
+  return "Working out the plan.";
+}
+
 function renderPlanRows() {
   const entries = planRows();
 
   if (entries.length === 0) {
-    el.rows.innerHTML = `<tr><td class="empty" colspan="3">${
-      state.mode === "convert"
-        ? "Select archives or images, then preview the copies."
-        : "Select files, then preview the rename."
-    }</td></tr>`;
+    el.rows.innerHTML = `<tr><td class="empty" colspan="3">${escapeHtml(planHint())}</td></tr>`;
     return;
   }
 
   el.rows.innerHTML = entries
     .map(
       (entry, index) => `
-        <tr>
+        <tr class="${entry.blocked ? "blocked" : ""}">
           <td class="select-cell">
             <input
               type="checkbox"
               data-index="${index}"
               ${entry.selected ? "checked" : ""}
+              ${entry.blocked ? "disabled" : ""}
               aria-label="Include ${escapeAttribute(entry.source_name)}"
             />
           </td>
           <td title="${escapeAttribute(entry.source)}">${escapeHtml(entry.source_name)}</td>
-          <td title="${escapeAttribute(entry.target)}">${escapeHtml(entry.target_name)}</td>
+          <td title="${escapeAttribute(entry.target)}">${escapeHtml(entry.target_name)}${
+            entry.blocked ? `<span class="row-note">${escapeHtml(entry.blocked)}</span>` : ""
+          }</td>
         </tr>
       `,
     )
     .join("");
 }
 
-/// Reloads a folder. `keepSelection` carries the current selection across the
-/// reload, for actions that leave their source files in place.
+/**
+ * Reloads a folder. `keepSelection` carries the current selection across the
+ * reload, for actions that leave their source files in place.
+ */
 async function openDirectory(path: string | null, message = "Ready", keepSelection = false) {
   setState({ busy: true, message: "Loading folder", messageKind: "idle" });
   const previous = keepSelection ? new Set(state.selected) : null;
@@ -732,6 +757,7 @@ async function openDirectory(path: string | null, message = "Ready", keepSelecti
     });
     renderBrowser();
     el.browserBody.scrollTop = 0;
+    void refreshPlan();
   } catch (error) {
     if (path !== null) {
       // A remembered folder can be renamed or unplugged; fall back to home.
@@ -755,21 +781,25 @@ async function chooseDirectory() {
   }
 }
 
-async function previewRename() {
+async function refreshPlan() {
   const files = eligibleFiles();
+  const settingsReady =
+    state.mode === "sequence"
+      ? sequenceOptions() !== null
+      : state.mode === "regex"
+        ? el.pattern.value.length > 0
+        : convertOptions() !== null;
 
-  if (state.busy || files.length === 0) {
+  if (state.busy || files.length === 0 || !settingsReady) {
+    update();
     return;
   }
 
-  setState({
-    busy: true,
-    plan: null,
-    conversion: null,
-    applied: false,
-    message: "Previewing",
-    messageKind: "idle",
-  });
+  const token = ++previewToken;
+  // A fresh plan clears a stale error, but must not talk over a result the
+  // user just earned, such as "3 files converted".
+  const cleared: Partial<State> =
+    state.messageKind === "error" ? { message: "Ready", messageKind: "idle" } : {};
 
   try {
     if (state.mode === "convert") {
@@ -777,12 +807,11 @@ async function previewRename() {
         files,
         options: convertOptions(),
       });
-      setState({
-        conversion,
-        busy: false,
-        message: `${conversion.entries.length} files ready`,
-        messageKind: "success",
-      });
+
+      if (token === previewToken) {
+        setState({ conversion, applied: false, ...cleared });
+      }
+
       return;
     }
 
@@ -795,18 +824,17 @@ async function previewRename() {
             replacement: el.replacement.value,
           });
 
-    setState({
-      plan,
-      busy: false,
-      message: `${plan.entries.length} files ready`,
-      messageKind: "success",
-    });
+    if (token === previewToken) {
+      setState({ plan, applied: false, ...cleared });
+    }
   } catch (error) {
-    setState({ busy: false, message: String(error), messageKind: "error" });
+    if (token === previewToken) {
+      setState({ plan: null, conversion: null, message: String(error), messageKind: "error" });
+    }
   }
 }
 
-/// Draws the bar, or hides it when `percent` is null.
+/** Draws the bar, or hides it when `percent` is null. */
 function showProgress(percent: number | null, label = "") {
   el.progress.hidden = percent === null;
 
@@ -908,6 +936,7 @@ function changeMode(mode: Mode) {
     message: "Ready",
     messageKind: "idle",
   });
+  void refreshPlan();
 }
 
 function escapeHtml(value: string) {
@@ -952,7 +981,7 @@ el.files.addEventListener("change", (event) => {
     state.selected.delete(checkbox.dataset.file);
   }
 
-  invalidatePlan();
+  schedulePreview();
 });
 
 el.selectAllFiles.addEventListener("click", () => {
@@ -961,13 +990,13 @@ el.selectAllFiles.addEventListener("click", () => {
   }
 
   syncFileCheckboxes();
-  invalidatePlan();
+  schedulePreview();
 });
 
 el.clearSelection.addEventListener("click", () => {
   state.selected.clear();
   syncFileCheckboxes();
-  invalidatePlan();
+  schedulePreview();
 });
 
 function syncFileCheckboxes() {
@@ -979,7 +1008,6 @@ function syncFileCheckboxes() {
 el.modeSequence.addEventListener("click", () => changeMode("sequence"));
 el.modeRegex.addEventListener("click", () => changeMode("regex"));
 el.modeConvert.addEventListener("click", () => changeMode("convert"));
-el.preview.addEventListener("click", previewRename);
 el.apply.addEventListener("click", applyRename);
 
 for (const input of [
@@ -991,18 +1019,22 @@ for (const input of [
   el.quality,
   el.suffix,
 ]) {
-  input.addEventListener("input", invalidatePlan);
+  input.addEventListener("input", schedulePreview);
 }
 
-el.format.addEventListener("change", invalidatePlan);
+el.format.addEventListener("change", schedulePreview);
 
 el.selectAll.addEventListener("change", () => {
   for (const entry of planTargets()) {
-    entry.selected = el.selectAll.checked;
+    if (!entry.blocked) {
+      entry.selected = el.selectAll.checked;
+    }
   }
 
   for (const checkbox of el.rows.querySelectorAll<HTMLInputElement>("input[data-index]")) {
-    checkbox.checked = el.selectAll.checked;
+    if (!checkbox.disabled) {
+      checkbox.checked = el.selectAll.checked;
+    }
   }
 
   updatePlanUi();
@@ -1017,7 +1049,7 @@ el.rows.addEventListener("change", (event) => {
 
   const entry = planTargets()[Number(checkbox.dataset.index)];
 
-  if (entry) {
+  if (entry && !entry.blocked) {
     entry.selected = checkbox.checked;
     updatePlanUi();
   }

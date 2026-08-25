@@ -37,16 +37,34 @@ fn plan_rejects_a_file_that_is_neither_an_archive_nor_an_image() {
 }
 
 #[test]
-fn plan_rejects_an_existing_output() {
+fn plan_marks_an_entry_whose_output_exists() {
     let dir = test_dir("plan_existing");
     let archive = dir.join("volume-1.zip");
     write_archive(&archive, &[("page-1.png", png(8, 8))]);
     fs::write(dir.join("volume-1-compressed.zip"), b"taken").expect("file should be created");
 
-    let error = plan_conversion(&[archive], &ConvertOptions::default())
-        .expect_err("an existing output should be rejected");
+    let plan = plan_conversion(&[archive], &ConvertOptions::default())
+        .expect("planning should still succeed");
 
-    assert_eq!(error.to_string(), "volume-1-compressed.zip already exists");
+    assert_eq!(plan.entries[0].blocked.as_deref(), Some("already exists"));
+    assert!(!plan.entries[0].selected);
+}
+
+#[test]
+fn plan_blocks_only_the_entry_that_collides() {
+    let dir = test_dir("plan_existing_partial");
+    let taken = dir.join("volume-1.zip");
+    let free = dir.join("volume-2.zip");
+    write_archive(&taken, &[("page-1.png", png(8, 8))]);
+    write_archive(&free, &[("page-1.png", png(8, 8))]);
+    fs::write(dir.join("volume-1-compressed.zip"), b"taken").expect("file should be created");
+
+    let plan = plan_conversion(&[taken, free], &ConvertOptions::default())
+        .expect("planning should still succeed");
+
+    assert!(plan.entries[0].blocked.is_some());
+    assert!(plan.entries[1].blocked.is_none());
+    assert!(plan.entries[1].selected);
 }
 
 #[test]
@@ -291,7 +309,7 @@ fn plan_accepts_archives_and_images_together() {
 }
 
 #[test]
-fn plan_rejects_two_sources_that_resolve_to_one_output() {
+fn plan_marks_two_sources_that_resolve_to_one_output() {
     let dir = test_dir("plan_collision");
     let jpg = dir.join("cover.jpg");
     let png_file = dir.join("cover.png");
@@ -302,13 +320,16 @@ fn plan_rejects_two_sources_that_resolve_to_one_output() {
         format: TargetFormat::Png,
         ..ConvertOptions::default()
     };
-    let error =
-        plan_conversion(&[jpg, png_file], &options).expect_err("a collision should be rejected");
+    let plan = plan_conversion(&[jpg, png_file], &options).expect("planning should still succeed");
 
-    assert_eq!(
-        error.to_string(),
-        "multiple files resolve to cover-compressed.png"
+    assert!(
+        plan.entries
+            .iter()
+            .all(|entry| entry.blocked.as_deref() == Some("two files resolve to this name")),
+        "{:?}",
+        plan.entries
     );
+    assert!(plan.entries.iter().all(|entry| !entry.selected));
 }
 
 #[test]
