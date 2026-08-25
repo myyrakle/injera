@@ -1,9 +1,62 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::{cmp::Ordering, iter::Peekable, str::Chars};
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+use crate::natural::natural_cmp;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameEntry {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub source_name: String,
+    pub target_name: String,
+    /// Whether `apply_rename_plan` should rename this entry. Entries left
+    /// unselected keep their current name and block that name as a target.
+    #[serde(default = "selected_by_default")]
+    pub selected: bool,
+}
+
+fn selected_by_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenamePlan {
+    pub directory: PathBuf,
+    pub entries: Vec<RenameEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameReport {
+    pub renamed_count: usize,
+}
+
+/// Smallest zero padding used when [`SequenceOptions::padding`] is `None`.
+pub const DEFAULT_SEQUENCE_PADDING: usize = 5;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SequenceOptions {
+    /// Text placed before the number, such as `photo-`.
+    pub prefix: String,
+    /// Number given to the first file.
+    pub start: usize,
+    /// Fixed zero padding width, or `None` to size it from the largest number.
+    pub padding: Option<usize>,
+}
+
+impl Default for SequenceOptions {
+    fn default() -> Self {
+        Self {
+            prefix: String::new(),
+            start: 1,
+            padding: None,
+        }
+    }
+}
 
 pub fn rename_by_sequence(directory: &Path) -> io::Result<()> {
     let stdout = io::stdout();
@@ -13,19 +66,58 @@ pub fn rename_by_sequence(directory: &Path) -> io::Result<()> {
 
 pub fn rename_by_sequence_with_writer(directory: &Path, writer: &mut impl Write) -> io::Result<()> {
     writeln!(writer, "Scanning {}", directory.display())?;
+    let plan = plan_sequence_rename(directory)?;
+    writeln!(writer, "Found {} files", plan.entries.len())?;
+
+    log_plan(writer, &plan)?;
+    apply_rename_plan(&plan)?;
+    writeln!(writer, "Done")?;
+
+    Ok(())
+}
+
+pub fn plan_sequence_rename(directory: &Path) -> io::Result<RenamePlan> {
+    plan_sequence_rename_with_options(directory, &SequenceOptions::default())
+}
+
+pub fn plan_sequence_rename_with_options(
+    directory: &Path,
+    options: &SequenceOptions,
+) -> io::Result<RenamePlan> {
     let files = sorted_files(directory)?;
-    writeln!(writer, "Found {} files", files.len())?;
+    plan_sequence_in(directory, files, options)
+}
 
-    let width = files.len().to_string().len().max(5);
+/// Plans a sequence rename over an explicit selection of files.
+///
+/// The files must all sit in one directory; they are numbered in natural order
+/// regardless of the order they are passed in.
+pub fn plan_sequence_rename_for_files(
+    files: &[PathBuf],
+    options: &SequenceOptions,
+) -> io::Result<RenamePlan> {
+    let (directory, files) = normalize_selection(files)?;
+    plan_sequence_in(&directory, files, options)
+}
 
+fn plan_sequence_in(
+    directory: &Path,
+    files: Vec<PathBuf>,
+    options: &SequenceOptions,
+) -> io::Result<RenamePlan> {
+    validate_prefix(&options.prefix)?;
+
+    let width = sequence_width(options, files.len());
     let targets = files
         .iter()
         .enumerate()
         .map(|(index, path)| {
-            let number = format!("{:0width$}", index + 1);
+            let number = options.start.saturating_add(index);
+            let number = format!("{number:0width$}");
+            let prefix = &options.prefix;
             let file_name = match path.extension().and_then(|extension| extension.to_str()) {
-                Some(extension) => format!("{number}.{extension}"),
-                None => number,
+                Some(extension) => format!("{prefix}{number}.{extension}"),
+                None => format!("{prefix}{number}"),
             };
 
             directory.join(file_name)
@@ -35,11 +127,7 @@ pub fn rename_by_sequence_with_writer(directory: &Path, writer: &mut impl Write)
     validate_unique_targets(&targets).map_err(io::Error::other)?;
     validate_available_targets(&files, &targets)?;
 
-    log_plan(writer, &files, &targets)?;
-    rename_all(&files, &targets)?;
-    writeln!(writer, "Done")?;
-
-    Ok(())
+    Ok(rename_plan(directory, files, targets))
 }
 
 pub fn rename_by_regex(
@@ -59,10 +147,42 @@ pub fn rename_by_regex_with_writer(
     writer: &mut impl Write,
 ) -> Result<(), RenameError> {
     writeln!(writer, "Scanning {}", directory.display()).map_err(RenameError::Io)?;
-    let regex = Regex::new(pattern).map_err(RenameError::InvalidRegex)?;
-    let files = sorted_files(directory).map_err(RenameError::Io)?;
-    writeln!(writer, "Found {} files", files.len()).map_err(RenameError::Io)?;
+    let plan = plan_regex_rename(directory, pattern, replacement)?;
+    writeln!(writer, "Found {} files", plan.entries.len()).map_err(RenameError::Io)?;
 
+    log_plan(writer, &plan).map_err(RenameError::Io)?;
+    apply_rename_plan(&plan).map_err(RenameError::Io)?;
+    writeln!(writer, "Done").map_err(RenameError::Io)?;
+
+    Ok(())
+}
+
+pub fn plan_regex_rename(
+    directory: &Path,
+    pattern: &str,
+    replacement: &str,
+) -> Result<RenamePlan, RenameError> {
+    let files = sorted_files(directory).map_err(RenameError::Io)?;
+    plan_regex_in(directory, files, pattern, replacement)
+}
+
+/// Plans a regex rename over an explicit selection of files.
+pub fn plan_regex_rename_for_files(
+    files: &[PathBuf],
+    pattern: &str,
+    replacement: &str,
+) -> Result<RenamePlan, RenameError> {
+    let (directory, files) = normalize_selection(files).map_err(RenameError::Io)?;
+    plan_regex_in(&directory, files, pattern, replacement)
+}
+
+fn plan_regex_in(
+    directory: &Path,
+    files: Vec<PathBuf>,
+    pattern: &str,
+    replacement: &str,
+) -> Result<RenamePlan, RenameError> {
+    let regex = Regex::new(pattern).map_err(RenameError::InvalidRegex)?;
     let targets = files
         .iter()
         .map(|path| {
@@ -77,11 +197,34 @@ pub fn rename_by_regex_with_writer(
     validate_unique_targets(&targets).map_err(RenameError::DuplicateTarget)?;
     validate_available_targets(&files, &targets).map_err(RenameError::Io)?;
 
-    log_plan(writer, &files, &targets).map_err(RenameError::Io)?;
-    rename_all(&files, &targets).map_err(RenameError::Io)?;
-    writeln!(writer, "Done").map_err(RenameError::Io)?;
+    Ok(rename_plan(directory, files, targets))
+}
 
-    Ok(())
+pub fn apply_rename_plan(plan: &RenamePlan) -> io::Result<RenameReport> {
+    let sources = plan
+        .entries
+        .iter()
+        .filter(|entry| entry.selected)
+        .map(|entry| entry.source.clone())
+        .collect::<Vec<_>>();
+    let targets = plan
+        .entries
+        .iter()
+        .filter(|entry| entry.selected)
+        .map(|entry| entry.target.clone())
+        .collect::<Vec<_>>();
+
+    validate_unique_targets(&targets).map_err(io::Error::other)?;
+    validate_available_targets(&sources, &targets)?;
+    rename_all(&sources, &targets)?;
+
+    Ok(RenameReport {
+        renamed_count: sources
+            .iter()
+            .zip(targets.iter())
+            .filter(|(source, target)| source != target)
+            .count(),
+    })
 }
 
 #[derive(Debug)]
@@ -118,7 +261,7 @@ impl std::fmt::Display for DuplicateTargetError {
         let target = self
             .target
             .file_name()
-            .unwrap_or_else(|| self.target.as_os_str())
+            .unwrap_or(self.target.as_os_str())
             .to_string_lossy();
         write!(formatter, "multiple files resolve to {target}")
     }
@@ -131,7 +274,7 @@ impl std::fmt::Display for BlockedTargetError {
         let target = self
             .target
             .file_name()
-            .unwrap_or_else(|| self.target.as_os_str())
+            .unwrap_or(self.target.as_os_str())
             .to_string_lossy();
         write!(formatter, "target already exists: {target}")
     }
@@ -167,69 +310,62 @@ fn sorted_files(directory: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-fn natural_cmp(left: &str, right: &str) -> Ordering {
-    let mut left = left.chars().peekable();
-    let mut right = right.chars().peekable();
+/// Sorts a selection naturally and returns the single directory holding it.
+fn normalize_selection(files: &[PathBuf]) -> io::Result<(PathBuf, Vec<PathBuf>)> {
+    let Some(first) = files.first() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no files selected",
+        ));
+    };
 
-    loop {
-        match (left.peek(), right.peek()) {
-            (Some(left_char), Some(right_char))
-                if left_char.is_ascii_digit() && right_char.is_ascii_digit() =>
-            {
-                let ordering = compare_number_chunks(&mut left, &mut right);
-                if ordering != Ordering::Equal {
-                    return ordering;
-                }
-            }
-            (Some(_), Some(_)) => {
-                let left_char = left.next().expect("peeked char should exist");
-                let right_char = right.next().expect("peeked char should exist");
-                let ordering = left_char.cmp(&right_char);
-                if ordering != Ordering::Equal {
-                    return ordering;
-                }
-            }
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (None, None) => return Ordering::Equal,
-        }
+    let directory = first
+        .parent()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "selected files must have a parent directory",
+            )
+        })?
+        .to_path_buf();
+
+    if files.iter().any(|file| file.parent() != Some(&directory)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "selected files must share one directory",
+        ));
+    }
+
+    let mut files = files.to_vec();
+    files.sort_by(|left, right| {
+        natural_cmp(&display_file_name(left), &display_file_name(right))
+            .then_with(|| display_file_name(left).cmp(&display_file_name(right)))
+    });
+
+    Ok((directory, files))
+}
+
+fn sequence_width(options: &SequenceOptions, count: usize) -> usize {
+    match options.padding {
+        Some(padding) => padding,
+        None => options
+            .start
+            .saturating_add(count.saturating_sub(1))
+            .to_string()
+            .len()
+            .max(DEFAULT_SEQUENCE_PADDING),
     }
 }
 
-fn compare_number_chunks(
-    left: &mut Peekable<Chars<'_>>,
-    right: &mut Peekable<Chars<'_>>,
-) -> Ordering {
-    let left_number = take_ascii_digits(left);
-    let right_number = take_ascii_digits(right);
-    let left_trimmed = left_number.trim_start_matches('0');
-    let right_trimmed = right_number.trim_start_matches('0');
-    let left_normalized = if left_trimmed.is_empty() {
-        "0"
-    } else {
-        left_trimmed
-    };
-    let right_normalized = if right_trimmed.is_empty() {
-        "0"
-    } else {
-        right_trimmed
-    };
-
-    left_normalized
-        .len()
-        .cmp(&right_normalized.len())
-        .then_with(|| left_normalized.cmp(right_normalized))
-        .then_with(|| left_number.len().cmp(&right_number.len()))
-}
-
-fn take_ascii_digits(chars: &mut Peekable<Chars<'_>>) -> String {
-    let mut digits = String::new();
-
-    while chars.peek().is_some_and(|char| char.is_ascii_digit()) {
-        digits.push(chars.next().expect("peeked char should exist"));
+fn validate_prefix(prefix: &str) -> io::Result<()> {
+    if prefix.contains('/') || prefix.contains('\\') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "prefix must not contain path separators",
+        ));
     }
 
-    digits
+    Ok(())
 }
 
 fn validate_unique_targets(targets: &[PathBuf]) -> Result<(), DuplicateTargetError> {
@@ -259,24 +395,43 @@ fn validate_available_targets(sources: &[PathBuf], targets: &[PathBuf]) -> io::R
     Ok(())
 }
 
-fn log_plan(writer: &mut impl Write, sources: &[PathBuf], targets: &[PathBuf]) -> io::Result<()> {
-    for (index, (source, target)) in sources.iter().zip(targets).enumerate() {
+fn log_plan(writer: &mut impl Write, plan: &RenamePlan) -> io::Result<()> {
+    for (index, entry) in plan.entries.iter().enumerate() {
         writeln!(
             writer,
             "[{}/{}] {} -> {}",
             index + 1,
-            sources.len(),
-            display_file_name(source),
-            display_file_name(target),
+            plan.entries.len(),
+            entry.source_name,
+            entry.target_name,
         )?;
     }
 
     Ok(())
 }
 
+fn rename_plan(directory: &Path, sources: Vec<PathBuf>, targets: Vec<PathBuf>) -> RenamePlan {
+    let entries = sources
+        .into_iter()
+        .zip(targets)
+        .map(|(source, target)| RenameEntry {
+            source_name: display_file_name(&source),
+            target_name: display_file_name(&target),
+            source,
+            target,
+            selected: true,
+        })
+        .collect();
+
+    RenamePlan {
+        directory: directory.to_path_buf(),
+        entries,
+    }
+}
+
 fn display_file_name(path: &Path) -> String {
     path.file_name()
-        .unwrap_or_else(|| path.as_os_str())
+        .unwrap_or(path.as_os_str())
         .to_string_lossy()
         .into_owned()
 }

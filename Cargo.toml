@@ -2,17 +2,58 @@
 name = "injera"
 version = "0.1.0"
 edition = "2024"
-license = "MIT" 
-authors = ["myyrakle <sssang97@naver.com>"] 
-description = "..." 
-keywords = ["1", "2", "3"] 
+license = "MIT"
+authors = ["myyrakle <sssang97@naver.com>"]
+description = "Batch file renaming core library for the injera app"
+keywords = ["rename", "batch", "files", "regex"]
 include = ["src/*", "Cargo.toml"]
 exclude = []
 readme = "README.md"
-repository = "https://github.com/myyrakle/rust_template"
-documentation = "https://github.com/myyrakle/rust_template/blob/master/README.md"
-homepage = "https://github.com/myyrakle/rust_template/blob/master/README.md"
+repository = "https://github.com/myyrakle/injera"
+documentation = "https://github.com/myyrakle/injera/blob/master/README.md"
+homepage = "https://github.com/myyrakle/injera/blob/master/README.md"
+
+[workspace]
+members = [".", "src-tauri"]
+resolver = "2"
 
 [dependencies]
-clap = { version = "4.5.37", features = ["derive"] }
+base64 = "0.23.1"
+# Decoding, plus PNG and JPEG encoding. WebP encoding goes through libwebp
+# instead, because this crate only writes WebP losslessly.
+image = { version = "0.25.10", default-features = false, features = [
+    "bmp",
+    "gif",
+    "jpeg",
+    "png",
+    "webp",
+] }
+rayon = "1.12.0"
 regex = "1.11.1"
+serde = { version = "1.0.228", features = ["derive"] }
+webp = "0.3.1"
+# Read-only archive support, restricted to the pure-Rust decoders.
+zip = { version = "8.6.0", default-features = false, features = [
+    "deflate-flate2-zlib-rs",
+    "deflate64",
+    "bzip2",
+    "lzma",
+] }
+
+# Image codecs are unusably slow when built without optimisation, and the dev
+# profile is what `tauri dev` runs. Optimise dependencies while keeping the
+# workspace crates debuggable.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.injera]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[dev-dependencies]
+serde_json = "1.0.145"
+zip = { version = "8.6.0", default-features = false }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }

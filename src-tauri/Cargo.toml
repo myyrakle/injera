@@ -1,0 +1,20 @@
+[package]
+name = "injera-app"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["myyrakle <sssang97@naver.com>"]
+description = "Tauri GUI app for injera"
+
+[lib]
+name = "injera_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+injera = { path = ".." }
+serde = { version = "1.0.228", features = ["derive"] }
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-dialog = "2.7.1"

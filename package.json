@@ -1,0 +1,28 @@
+{
+  "name": "injera-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "tsc && vite build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:build:linux": "NO_STRIP=1 tauri build",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:build": "tauri android build",
+    "tauri:android:dev": "tauri android dev",
+    "tauri:ios:init": "tauri ios init",
+    "tauri:ios:dev": "tauri ios dev"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.3",
+    "typescript": "6.0.3",
+    "vite": "8.1.0"
+  }
+}

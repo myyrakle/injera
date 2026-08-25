@@ -2,175 +2,165 @@
 
 [English](README.md) | [한국어](README.ko.md)
 
-`injera` is a convenience CLI tool for file management.
+`injera` is a Tauri v2 app for batch file renaming on desktop and mobile.
 
-Currently supported features:
+## Features
 
-- Batch rename files to sequential names such as `00001` and `00002` after natural sorting
-- Batch rename file names with a regular expression pattern and replacement
-
-## Installation
-
-You need the Rust toolchain installed.
-
-```bash
-cargo build --release
-```
-
-After the build finishes, the executable is created at:
-
-```bash
-./target/release/injera
-```
-
-You can also run it locally with `cargo run`.
-
-```bash
-cargo run -- <COMMAND>
-```
-
-## Usage
-
-Show the full CLI help:
-
-```bash
-cargo run -- --help
-```
-
-Show help for rename commands:
-
-```bash
-cargo run -- rename --help
-```
-
-## Sequential Rename
-
-Rename every regular file in a directory to a sequential name after natural sorting by the original file name.
-
-```bash
-cargo run -- rename sequence <DIR>
-```
-
-Example:
-
-```bash
-cargo run -- rename sequence ./photos
-```
-
-Rules:
-
-- Directories are excluded from rename targets.
-- Existing file extensions are preserved.
-- Files without extensions use only the sequential number.
-- The zero-padding width is calculated from the number of files.
-- The minimum padding width is 5 digits.
-
-For example, if `./photos` contains:
-
-```text
-apple.jpg
-banana.txt
-carrot
-```
-
-They are renamed as follows:
-
-```text
-00001.jpg
-00002.txt
-00003
-```
-
-If there are 100000 files, the width grows as needed, such as `000001`.
-
-File names containing numbers are sorted in a human-friendly natural order.
-
-```text
-file-1.txt
-file-2.txt
-file-10.txt
-```
-
-These become `00001.txt`, `00002.txt`, and `00003.txt` in that order.
-
-Progress logs are printed while the command runs.
-
-```text
-Scanning ./photos
-Found 3 files
-[1/3] apple.jpg -> 00001.jpg
-[2/3] banana.txt -> 00002.txt
-[3/3] carrot -> 00003
-Done
-```
-
-## Regex Rename
-
-Rename every regular file in a directory by applying a regular expression replacement to its file name.
-
-```bash
-cargo run -- rename regex <DIR> <PATTERN> <REPLACEMENT>
-```
-
-Example:
-
-```bash
-cargo run -- rename regex ./photos '^IMG_(\d+)\.(jpg|png)$' 'photo-$1.$2'
-```
-
-This renames files as follows:
-
-```text
-IMG_001.jpg -> photo-001.jpg
-IMG_002.png -> photo-002.png
-```
-
-You can use capture groups such as `$1` and `$2` in the replacement.
-
-Another example:
-
-```bash
-cargo run -- rename regex ./docs '-' '_'
-```
-
-This replaces every `-` in file names with `_`.
-
-```text
-daily-report-draft.txt -> daily_report_draft.txt
-```
-
-Regex rename also prints progress logs.
-
-```text
-Scanning ./photos
-Found 2 files
-[1/2] IMG_001.jpg -> photo-001.jpg
-[2/2] IMG_002.png -> photo-002.png
-Done
-```
-
-## Conflict Handling
-
-If multiple files resolve to the same final name, the operation stops.
-
-For example, this command fails because both `a.txt` and `b.txt` would become `same.txt`.
-
-```bash
-cargo run -- rename regex ./files '^[ab]\.txt$' 'same.txt'
-```
-
-The command also returns an error before renaming if a final target path is blocked by an existing item such as a directory.
+- Browse folders in the app, without depending on a native folder dialog.
+- Pick exactly the files to rename with multi-select, or take the whole folder at once.
+- See the first image inside each `.zip` or `.cbz` as a thumbnail, so archives are recognisable.
+- Re-encode images, either on their own or inside a `.zip`/`.cbz`, writing a new file and leaving the original alone.
+- Reopen the folder you were last browsing.
+- Preview every rename before applying changes.
+- Rename files to natural-sort sequence names such as `00001.jpg`.
+- Choose a prefix, a start number, and a zero padding width for sequence names.
+- Rename files with a regular expression pattern and replacement.
+- Deselect individual files in the preview to leave them untouched.
+- Prevent duplicate or blocked target names before execution.
+- Build desktop packages and Android mobile artifacts from the same app code.
 
 ## Development
 
-Run tests:
+`make` lists every target. The npm scripts underneath still work if you prefer them.
 
 ```bash
-cargo test
+make          # list the targets
+make dev      # run the desktop app with hot reload
+make check    # formatting, clippy, tests, and the frontend build, as CI runs them
 ```
 
-Check formatting:
+`make lint` pins the same toolchain as the lint workflow, so a green `make check` means a green CI.
+
+## Browsing And Selecting
+
+The app opens on your home folder and lists that folder's sub-folders and files in natural order, so
+`scan-2.jpg` comes before `scan-10.jpg`.
+
+- **Rename or convert** in the toolbar opens the settings over the list, so the action button is
+  always one click away instead of below however many files the folder holds.
+- **Up** and **Home** move between folders; clicking a folder row enters it.
+- **Choose** opens the native folder dialog on desktop as a shortcut.
+- Tick the files to rename, or use **Select all**. Only the ticked files are renamed, and the
+  sequence numbering follows their natural order.
+- Changing folders clears the current selection and preview.
+
+Files ending in `.zip` or `.cbz` are read for their first image, in natural order inside the archive,
+and it is shown as a thumbnail. Archives holding no image, or whose first image is larger than 12 MB,
+fall back to a plain placeholder. Thumbnails load only as rows scroll into view.
+
+## Converting Images
+
+The **Convert** mode writes a converted copy of everything selected and never modifies the original.
+It takes both kinds of input:
+
+- An **archive** (`.zip`, `.cbz`) is cloned with every image inside it re-encoded.
+  `volume-1.cbz` becomes `volume-1-compressed.cbz`.
+- An **image file** is re-encoded on its own, taking the extension of the chosen format.
+  `cover.png` becomes `cover-compressed.jpg` when the format is JPEG.
+
+Both can be selected together. Anything else in the selection is left out.
+
+`WebP` compresses scanned pages far harder than `JPEG` does. On a ten page scan of 24.6 MB, `JPEG`
+at quality 75 gave 20.4 MB and `WebP` at the same quality gave 11.7 MB. Quality 100 asks for
+lossless WebP, which stores every pixel and will be *larger* than a lossy source: 39.0 MB for the
+same scan. Leave it below 100 unless lossless is what you want.
+
+The plan follows from what is ticked and what the settings say, and updates itself as either
+changes, so there is no preview step to press. An output name that is already taken, or two sources
+that resolve to the same name, mark those rows instead of stopping the batch; the rest still run.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| Image format | Keep original | `Keep` re-encodes each image in its own format. `JPEG`, `PNG`, and `WebP` convert every image, and the entry extension changes to match. |
+| Quality | `80` | Quality for the lossy formats, 1-100. WebP treats 100 as lossless. PNG is always lossless, so the field is disabled for it. |
+| Suffix | `-compressed` | Appended to the file stem to name the clone. Path separators are rejected. |
+
+Images are converted across all cores, a batch at a time, so a large archive never has to fit in
+memory. Progress is reported per image while a run is going.
+
+Because the sources are left alone, the selection survives a run: change the quality or the suffix
+and convert the same files again. The names just written show up as taken, so nothing is
+overwritten by accident.
+
+When the format is left at `Keep`, a re-encode that came out larger is thrown away and the original
+bytes are kept, so shrinking an archive can never grow it. Asking for a specific format always
+converts, since that is an explicit instruction.
+
+Inside an archive, non-image entries are copied through byte for byte, an image that cannot be
+decoded is copied unchanged rather than failing the archive, and entries above 64 MB are copied
+without decoding. A standalone image that cannot be decoded is reported instead. The run stops if an
+output name already exists or if two sources resolve to the same name, so nothing is overwritten.
+
+## Sequence Options
+
+Sequence mode builds each name from a prefix, a number, and the original extension.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| Prefix | empty | Text placed before the number, such as `photo-`. Path separators are rejected. |
+| Start number | `1` | Number given to the first file in natural-sort order. |
+| Padding | auto | Zero padding width. Auto uses at least 5 digits, and grows so the largest number fits. |
+
+For example, a prefix of `photo-`, a start number of `8`, and a padding of `3` renames the first
+file to `photo-008.jpg`.
+
+## Selecting Files
+
+Every previewed file is selected by default. Clear a row's checkbox to keep that file's current
+name; the rename runs only on the selected rows. A file left unselected still occupies its name, so
+the app reports an error instead of overwriting it.
+
+## Desktop Build
+
+Build desktop packages:
 
 ```bash
-cargo fmt --check
+npm run tauri:build
 ```
+
+On rolling Linux distributions where AppImage bundling fails while stripping newer ELF sections, use:
+
+```bash
+npm run tauri:build:linux
+```
+
+Linux packages are written under:
+
+```text
+target/release/bundle/
+```
+
+## Android Build
+
+`ANDROID_HOME` and `NDK_HOME` must be set; the Android targets check for them up front rather than
+failing deep inside Gradle.
+
+Initialize the Android project if it has not been generated yet:
+
+```bash
+make android-init
+```
+
+Build Android artifacts:
+
+```bash
+make android
+make android-artifacts   # list what came out
+```
+
+The unsigned APK and AAB are written under:
+
+```text
+src-tauri/gen/android/app/build/outputs/
+```
+
+### Android Limitation
+
+`tauri-plugin-dialog` returns `FolderPickerNotImplemented` for directory dialogs on Android and iOS,
+so the **Choose** button does not work there. The in-app browser is the way in on mobile. Android
+scoped storage still governs which folders the app may read, so folders outside the app's own storage
+may list as unreadable until the platform grants access.
+
+## iOS Build
+
+iOS requires macOS and Xcode. Use the Tauri iOS commands from a macOS environment with the iOS toolchain installed.

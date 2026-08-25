@@ -26,3 +26,9 @@ target
 /target
 
 .codex
+
+.worktrees
+.worktrees/
+
+node_modules/
+dist/
