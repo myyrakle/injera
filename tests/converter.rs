@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use injera::converter::{
     ConvertKind, ConvertOptions, TargetFormat, convert_entry, convert_entry_with_progress,
-    plan_conversion,
+    fitted_size, plan_conversion,
 };
 
 #[test]
@@ -446,11 +446,112 @@ fn webp_quality_changes_the_size() {
     );
 }
 
+#[test]
+fn fitted_size_brings_the_longer_side_to_the_limit() {
+    assert_eq!(fitted_size(4000, 2000, 1000), (1000, 500));
+    assert_eq!(fitted_size(2000, 4000, 1000), (500, 1000));
+    assert_eq!(fitted_size(3000, 3000, 1000), (1000, 1000));
+    // 1000 * 1000 / 3000 = 333.3, rounded.
+    assert_eq!(fitted_size(3000, 1000, 1000), (1000, 333));
+    // 2000 * 1000 / 3000 = 666.7, rounded up.
+    assert_eq!(fitted_size(3000, 2000, 1000), (1000, 667));
+    // A sliver keeps at least one pixel.
+    assert_eq!(fitted_size(10000, 1, 100), (100, 1));
+}
+
+#[test]
+fn plan_rejects_a_zero_max_size() {
+    let dir = test_dir("plan_max_zero");
+    let archive = dir.join("volume-1.zip");
+    write_archive(&archive, &[("page-1.png", png(8, 8))]);
+
+    let options = ConvertOptions {
+        max_dimension: Some(0),
+        ..ConvertOptions::default()
+    };
+    let error = plan_conversion(&[archive], &options).expect_err("0 should be rejected");
+
+    assert_eq!(error.to_string(), "max size must be at least 1 pixel");
+}
+
+#[test]
+fn convert_shrinks_oversized_images_in_an_archive_and_leaves_small_ones() {
+    let dir = test_dir("convert_max_archive");
+    let archive = dir.join("volume-1.cbz");
+    write_archive(
+        &archive,
+        &[
+            ("wide.png", noisy_png(400, 200)),
+            ("tall.png", noisy_png(150, 300)),
+            ("small.png", noisy_png(80, 60)),
+        ],
+    );
+
+    let options = ConvertOptions {
+        format: TargetFormat::Jpeg,
+        max_dimension: Some(100),
+        ..ConvertOptions::default()
+    };
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
+
+    assert_eq!(report.images_converted, 3);
+    assert_eq!(entry_dimensions(&report.output, "wide.jpg"), (100, 50));
+    assert_eq!(entry_dimensions(&report.output, "tall.jpg"), (50, 100));
+    // Never enlarged.
+    assert_eq!(entry_dimensions(&report.output, "small.jpg"), (80, 60));
+}
+
+#[test]
+fn convert_resizes_even_when_the_format_is_kept() {
+    let dir = test_dir("convert_max_keep");
+    let archive = dir.join("volume-1.zip");
+    // A flat PNG re-encodes to about the same size, which on its own would be
+    // kept as the original. The resize must still be applied.
+    write_archive(&archive, &[("page.png", png(64, 32))]);
+
+    let options = ConvertOptions {
+        max_dimension: Some(16),
+        ..ConvertOptions::default()
+    };
+    let plan = plan_conversion(&[archive], &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
+
+    assert_eq!(report.images_converted, 1);
+    assert_eq!(report.images_kept, 0);
+    assert_eq!(entry_dimensions(&report.output, "page.png"), (16, 8));
+}
+
+#[test]
+fn convert_shrinks_a_single_image_file() {
+    let dir = test_dir("convert_max_image");
+    let source = dir.join("cover.png");
+    fs::write(&source, noisy_png(300, 600)).expect("image should be created");
+
+    let options = ConvertOptions {
+        max_dimension: Some(200),
+        ..ConvertOptions::default()
+    };
+    let plan =
+        plan_conversion(std::slice::from_ref(&source), &options).expect("plan should succeed");
+    let report = convert_entry(&plan.entries[0], &options).expect("conversion should succeed");
+
+    let output = image::open(&report.output).expect("output should decode");
+    assert_eq!((output.width(), output.height()), (100, 200));
+    assert!(report.output_bytes < report.source_bytes);
+}
+
+fn entry_dimensions(path: &Path, name: &str) -> (u32, u32) {
+    let image = image::load_from_memory(&read_entry(path, name)).expect("entry should decode");
+    (image.width(), image.height())
+}
+
 fn convert_once(source: &Path, format: TargetFormat, quality: u8, suffix: &str) -> u64 {
     let options = ConvertOptions {
         format,
         quality,
         suffix: suffix.to_string(),
+        ..ConvertOptions::default()
     };
     let plan = plan_conversion(std::slice::from_ref(&source.to_path_buf()), &options)
         .expect("plan should succeed");

@@ -73,6 +73,7 @@ that resolve to the same name, mark those rows instead of stopping the batch; th
 | --- | --- | --- |
 | Image format | Keep original | `Keep` re-encodes each image in its own format. `JPEG`, `PNG`, and `WebP` convert every image, and the entry extension changes to match. |
 | Quality | `80` | Quality for the lossy formats, 1-100. WebP treats 100 as lossless. PNG is always lossless, so the field is disabled for it. |
+| Max size (px) | empty | Scales an image down so its longer side is this many pixels, keeping the aspect ratio. With `1600`, a 4000×3000 page becomes 1600×1200 and a 2000×5000 page becomes 640×1600. Smaller images are never enlarged. Empty leaves dimensions alone. |
 | Suffix | `-compressed` | Appended to the file stem to name the clone. Path separators are rejected. |
 
 Images are converted across all cores, a batch at a time, so a large archive never has to fit in
@@ -84,7 +85,8 @@ overwritten by accident.
 
 When the format is left at `Keep`, a re-encode that came out larger is thrown away and the original
 bytes are kept, so shrinking an archive can never grow it. Asking for a specific format always
-converts, since that is an explicit instruction.
+converts, since that is an explicit instruction, and so does an image that was scaled down to fit
+the max size.
 
 Inside an archive, non-image entries are copied through byte for byte, an image that cannot be
 decoded is copied unchanged rather than failing the archive, and entries above 64 MB are copied

@@ -60,6 +60,8 @@ type TargetFormat = "keep" | "jpeg" | "png" | "webp";
 type ConvertOptions = {
   format: TargetFormat;
   quality: number;
+  /** Longest side in pixels; larger images are scaled down to fit. */
+  max_dimension: number | null;
   suffix: string;
 };
 
@@ -284,6 +286,15 @@ app.innerHTML = `
           <input id="quality" inputmode="numeric" value="80" />
         </label>
         <label class="field">
+          <span>Max size (px)</span>
+          <input
+            id="max-dimension"
+            inputmode="numeric"
+            placeholder="no limit"
+            title="Scales the longer side down to this, keeping the aspect ratio. Leave empty to keep the size."
+          />
+        </label>
+        <label class="field">
           <span>Suffix</span>
           <input id="suffix" value="-compressed" />
         </label>
@@ -348,6 +359,7 @@ const el = {
   convertControls: required<HTMLElement>("#convert-controls"),
   format: required<HTMLSelectElement>("#format"),
   quality: required<HTMLInputElement>("#quality"),
+  maxDimension: required<HTMLInputElement>("#max-dimension"),
   suffix: required<HTMLInputElement>("#suffix"),
   prefix: required<HTMLInputElement>("#prefix"),
   start: required<HTMLInputElement>("#start"),
@@ -488,7 +500,19 @@ function convertOptions(): ConvertOptions | null {
     return null;
   }
 
-  return { format: el.format.value as TargetFormat, quality, suffix };
+  // Empty means no limit; anything else must be a positive pixel count.
+  const maxRaw = el.maxDimension.value.trim();
+  let max_dimension: number | null = null;
+
+  if (maxRaw.length > 0) {
+    max_dimension = parseCount(maxRaw);
+
+    if (max_dimension === null || max_dimension < 1 || max_dimension > 0xffff_ffff) {
+      return null;
+    }
+  }
+
+  return { format: el.format.value as TargetFormat, quality, max_dimension, suffix };
 }
 
 function planSelectedCount(): number {
@@ -1049,6 +1073,7 @@ for (const input of [
   el.pattern,
   el.replacement,
   el.quality,
+  el.maxDimension,
   el.suffix,
 ]) {
   input.addEventListener("input", schedulePreview);
