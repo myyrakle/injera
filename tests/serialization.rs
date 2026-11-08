@@ -84,3 +84,22 @@ fn rename_report_exposes_snake_case_count() {
 
     assert_eq!(json, r#"{"renamed_count":3}"#);
 }
+
+#[test]
+fn convert_options_read_a_missing_or_null_max_size_as_no_limit() {
+    use injera::converter::ConvertOptions;
+
+    let missing: ConvertOptions =
+        serde_json::from_str(r#"{"format":"webp","quality":70,"suffix":"-s"}"#)
+            .expect("payload without a max size should deserialize");
+    let null: ConvertOptions = serde_json::from_str(
+        r#"{"format":"webp","quality":70,"max_dimension":null,"suffix":"-s"}"#,
+    )
+    .expect("a null max size should deserialize");
+    let set: ConvertOptions =
+        serde_json::from_str(r#"{"max_dimension":1600}"#).expect("a max size should deserialize");
+
+    assert_eq!(missing.max_dimension, None);
+    assert_eq!(null.max_dimension, None);
+    assert_eq!(set.max_dimension, Some(1600));
+}

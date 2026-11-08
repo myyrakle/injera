@@ -400,7 +400,7 @@ h2 {
 }
 
 .convert-controls {
-  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.3fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
 }
 
 .field {

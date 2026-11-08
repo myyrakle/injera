@@ -34,6 +34,10 @@ pub struct ConvertOptions {
     /// Quality for the lossy formats, 1-100. PNG ignores it, and WebP treats
     /// 100 as lossless.
     pub quality: u8,
+    /// Longest side, in pixels, an image may keep. A larger image is scaled
+    /// down so its longer side matches, keeping the aspect ratio. Smaller
+    /// images are never enlarged. `None` leaves dimensions alone.
+    pub max_dimension: Option<u32>,
     /// Appended to the file stem to name the clone.
     pub suffix: String,
 }
@@ -43,6 +47,7 @@ impl Default for ConvertOptions {
         Self {
             format: TargetFormat::Keep,
             quality: 80,
+            max_dimension: None,
             suffix: "-compressed".to_string(),
         }
     }
@@ -211,7 +216,7 @@ fn convert_image_file(
     let bytes = fs::read(&entry.source).map_err(ConvertError::Io)?;
     let source_bytes = bytes.len() as u64;
 
-    let Some((data, _)) = convert_image(&bytes, options) else {
+    let Some(Converted { data, .. }) = convert_image(&bytes, options) else {
         return Err(ConvertError::Rejected {
             message: format!("{} could not be decoded", entry.source_name),
         });
@@ -356,13 +361,19 @@ fn reencode(name: &str, bytes: &[u8], options: &ConvertOptions) -> Outcome {
         return Outcome::Copied;
     }
 
-    let Some((data, extension)) = convert_image(bytes, options) else {
+    let Some(Converted {
+        data,
+        extension,
+        resized,
+    }) = convert_image(bytes, options)
+    else {
         return Outcome::Undecodable;
     };
 
     // Keeping the original format is a request to shrink, not to rewrite, so a
-    // re-encode that grew is not worth taking. An explicit format change is.
-    if options.format == TargetFormat::Keep && data.len() >= bytes.len() {
+    // re-encode that grew is not worth taking. An explicit format change is,
+    // and so is a resize: keeping the original would break the size limit.
+    if options.format == TargetFormat::Keep && !resized && data.len() >= bytes.len() {
         return Outcome::Kept;
     }
 
@@ -399,6 +410,12 @@ fn validate_options(options: &ConvertOptions) -> Result<(), ConvertError> {
     if !(1..=100).contains(&options.quality) {
         return Err(ConvertError::Rejected {
             message: "quality must be between 1 and 100".to_string(),
+        });
+    }
+
+    if options.max_dimension == Some(0) {
+        return Err(ConvertError::Rejected {
+            message: "max size must be at least 1 pixel".to_string(),
         });
     }
 
@@ -454,9 +471,17 @@ fn display_name(path: &Path) -> String {
         .into_owned()
 }
 
-/// Returns the re-encoded bytes and the extension they should carry, or `None`
-/// when the entry is not a decodable image.
-fn convert_image(bytes: &[u8], options: &ConvertOptions) -> Option<(Vec<u8>, &'static str)> {
+struct Converted {
+    data: Vec<u8>,
+    /// The extension the bytes should carry.
+    extension: &'static str,
+    /// Whether the image was scaled down to fit `max_dimension`.
+    resized: bool,
+}
+
+/// Re-encodes an image, or returns `None` when the entry is not a decodable
+/// image.
+fn convert_image(bytes: &[u8], options: &ConvertOptions) -> Option<Converted> {
     let source_format = image::guess_format(bytes).ok()?;
     let target = match options.format {
         TargetFormat::Keep => source_format,
@@ -465,9 +490,47 @@ fn convert_image(bytes: &[u8], options: &ConvertOptions) -> Option<(Vec<u8>, &'s
         TargetFormat::Webp => ImageFormat::WebP,
     };
     let image = image::load_from_memory_with_format(bytes, source_format).ok()?;
-    let encoded = encode(&image, target, options.quality)?;
+    let (image, resized) = match options.max_dimension {
+        Some(limit) => fit_within(image, limit),
+        None => (image, false),
+    };
+    let data = encode(&image, target, options.quality)?;
 
-    Some((encoded, extension_for(target)))
+    Some(Converted {
+        data,
+        extension: extension_for(target),
+        resized,
+    })
+}
+
+/// Scales `image` down so its longer side is `limit`, keeping the aspect
+/// ratio. An image already within the limit is returned untouched.
+fn fit_within(image: DynamicImage, limit: u32) -> (DynamicImage, bool) {
+    let (width, height) = (image.width(), image.height());
+
+    if width.max(height) <= limit {
+        return (image, false);
+    }
+
+    let (width, height) = fitted_size(width, height, limit);
+    let resized = image.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+
+    (resized, true)
+}
+
+/// The size of `width` x `height` with its longer side brought to `limit`.
+/// The shorter side is rounded and never drops below one pixel.
+pub fn fitted_size(width: u32, height: u32, limit: u32) -> (u32, u32) {
+    let scale = |side: u32, long: u32| {
+        let scaled = (u64::from(side) * u64::from(limit) + u64::from(long) / 2) / u64::from(long);
+        (scaled as u32).max(1)
+    };
+
+    if width >= height {
+        (limit, scale(height, width))
+    } else {
+        (scale(width, height), limit)
+    }
 }
 
 fn encode(image: &DynamicImage, format: ImageFormat, quality: u8) -> Option<Vec<u8>> {
