@@ -154,6 +154,37 @@ The unsigned APK and AAB are written under:
 src-tauri/gen/android/app/build/outputs/
 ```
 
+### Android Release
+
+Pushing a tag such as `v0.2.0` runs `.github/workflows/release_android.yml`, which builds a universal
+APK (arm64, armv7, x86_64), signs it, and attaches `injera-0.2.0.apk` to the GitHub Release for that
+tag. The version comes from the tag, so `tauri.conf.json` does not need editing first. A tag with a
+suffix such as `v0.2.0-beta.1` becomes a prerelease.
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+Signing needs these repository secrets; the workflow stops before building if any is missing.
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | the keystore file, base64-encoded |
+| `ANDROID_KEYSTORE_PASSWORD` | the keystore password |
+| `ANDROID_KEY_ALIAS` | the key alias |
+| `ANDROID_KEY_PASSWORD` | the key password; optional when it matches the keystore password |
+
+Make the keystore once and keep it: Android refuses an update signed with a different key.
+
+```bash
+keytool -genkeypair -keystore injera-release.keystore -alias injera \
+  -keyalg RSA -keysize 2048 -validity 10000
+gh secret set ANDROID_KEYSTORE_BASE64 < <(base64 -w0 injera-release.keystore)
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS --body injera
+```
+
 ### Android Limitation
 
 `tauri-plugin-dialog` returns `FolderPickerNotImplemented` for directory dialogs on Android and iOS,

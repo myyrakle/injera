@@ -151,6 +151,37 @@ unsigned APK와 AAB는 다음 위치에 생성됩니다.
 src-tauri/gen/android/app/build/outputs/
 ```
 
+### Android 릴리스
+
+`v0.2.0` 같은 태그를 푸시하면 `.github/workflows/release_android.yml`이 universal APK(arm64, armv7,
+x86_64)를 빌드하고 서명해서, 해당 태그의 GitHub Release에 `injera-0.2.0.apk`로 올립니다. 버전은
+태그에서 가져오므로 `tauri.conf.json`을 미리 고칠 필요가 없습니다. `v0.2.0-beta.1`처럼 접미사가 붙은
+태그는 prerelease가 됩니다.
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+서명에는 다음 저장소 시크릿이 필요합니다. 하나라도 없으면 워크플로가 빌드 전에 멈춥니다.
+
+| 시크릿 | 값 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | base64로 인코딩한 키스토어 파일 |
+| `ANDROID_KEYSTORE_PASSWORD` | 키스토어 비밀번호 |
+| `ANDROID_KEY_ALIAS` | 키 alias |
+| `ANDROID_KEY_PASSWORD` | 키 비밀번호. 키스토어 비밀번호와 같으면 생략 가능 |
+
+키스토어는 한 번 만들어 잘 보관하세요. 다른 키로 서명한 APK는 기존 설치본을 업데이트할 수 없습니다.
+
+```bash
+keytool -genkeypair -keystore injera-release.keystore -alias injera \
+  -keyalg RSA -keysize 2048 -validity 10000
+gh secret set ANDROID_KEYSTORE_BASE64 < <(base64 -w0 injera-release.keystore)
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS --body injera
+```
+
 ### Android 제약
 
 `tauri-plugin-dialog`가 Android와 iOS의 디렉토리 다이얼로그에 대해 `FolderPickerNotImplemented`를
